@@ -1,0 +1,12 @@
+{
+    "name": "GreekTolls",
+    "short_name": "GreekTolls",
+    "description": "Calculate toll costs for your Greek road trip",
+    "start_url": "./index.html",
+    "scope": "./",
+    "display": "standalone",
+    "background_color": "#101216",
+    "theme_color": "#ff9f43",
+    "lang": "el",
+    "icons": []
+}
