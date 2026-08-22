@@ -40,22 +40,69 @@
             margin-bottom: 15px;
         }
         label { display: block; font-size: 0.85rem; color: var(--text-dim); margin-bottom: 6px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; }
-        select, input[type="number"] {
+
+        .endpoint-row { position: relative; margin-bottom: 14px; }
+        .endpoint-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+        .endpoint-label { font-size: 0.85rem; color: var(--text-dim); font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; }
+        .endpoint-value { font-size: 0.92rem; color: var(--accent); font-weight: 700; max-width: 60%; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        .search-wrap { position: relative; }
+        input[type="text"], input[type="number"] {
             width: 100%;
-            padding: 13px 14px;
-            font-size: 1.05rem;
+            padding: 12px 14px;
+            font-size: 1rem;
             border-radius: 12px;
             border: none;
             background: rgba(0,0,0,0.35);
             color: var(--text-main);
             font-family: inherit;
-            appearance: none;
         }
-        select:focus { outline: 1px solid var(--accent); }
-        .row2 { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: center; margin-bottom: 16px; }
+        input:focus { outline: 1px solid var(--accent); }
+        .geo-results {
+            position: absolute;
+            top: calc(100% + 4px); left: 0; right: 0;
+            z-index: 50;
+            background: #1c2027;
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+        .geo-result { padding: 11px 14px; cursor: pointer; font-size: 0.95rem; border-bottom: 1px solid var(--border-color); }
+        .geo-result:last-child { border-bottom: none; }
+        .geo-result:hover { background: rgba(255,159,67,0.1); color: var(--accent); }
+
+        .quick-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+        .quick-chip {
+            padding: 5px 12px;
+            border-radius: 20px;
+            border: 1px solid var(--border-color);
+            background: rgba(0,0,0,0.25);
+            color: var(--text-dim);
+            font-size: 0.8rem;
+            cursor: pointer;
+            font-family: inherit;
+            transition: all 0.15s;
+        }
+        .quick-chip:hover { border-color: var(--accent); color: var(--accent); }
+
+        .gps-btn {
+            padding: 5px 12px;
+            border-radius: 20px;
+            border: 1px solid rgba(0,213,255,0.35);
+            background: transparent;
+            color: #00d5ff;
+            font-size: 0.8rem;
+            font-weight: 700;
+            cursor: pointer;
+            font-family: inherit;
+            white-space: nowrap;
+        }
+
+        .row-swap { display: flex; justify-content: center; margin: -4px 0 14px; }
         .swap-btn {
             background: rgba(255,159,67,0.12); border: 1px solid rgba(255,159,67,0.3);
-            color: var(--accent); font-size: 1.2rem;
+            color: var(--accent); font-size: 1.15rem;
             width: 40px; height: 40px; border-radius: 50%;
             cursor: pointer; display: flex; align-items: center; justify-content: center;
             transition: transform 0.25s;
@@ -144,7 +191,7 @@
         .route-meta { color: var(--text-dim); margin-top: 10px; font-size: 0.95rem; font-variant-numeric: tabular-nums; }
         .route-meta b { color: var(--text-main); }
 
-        .sub-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+        .sub-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 14px; }
         .sub-stat {
             background: var(--card-bg); border-radius: 14px; border: 1px solid var(--border-color);
             padding: 14px; text-align: center;
@@ -199,19 +246,36 @@
         <button class="lang-btn" id="langBtn">EN</button>
     </header>
     <h1>GreekTolls</h1>
-    <p class="tagline" data-i18n="tagline">Υπολόγισε το κόστος διόδιας για το ταξίδι σου</p>
+    <p class="tagline" data-i18n="tagline">Υπολόγισε τα διόδια του ταξιδιού σου</p>
 
     <div class="card">
-        <div class="row2">
-            <div>
-                <label data-i18n="from">Αφετηρία</label>
-                <select id="fromSel"></select>
+        <!-- FROM -->
+        <div class="endpoint-row">
+            <div class="endpoint-head">
+                <span class="endpoint-label" data-i18n="from">Αφετηρία</span>
+                <button class="gps-btn" id="gpsBtn" onclick="useGpsOrigin()" data-i18n="use_gps">📍 Τοποθεσία μου</button>
             </div>
+            <div class="search-wrap">
+                <input type="text" id="fromInput" autocomplete="off" placeholder="π.χ. Αθήνα…">
+                <div class="geo-results" id="fromResults"></div>
+            </div>
+            <div class="quick-chips" id="fromQuick"></div>
+        </div>
+
+        <div class="row-swap">
             <button class="swap-btn" onclick="swapCities()" aria-label="Swap">⇅</button>
-            <div>
-                <label data-i18n="to">Προορισμός</label>
-                <select id="toSel"></select>
+        </div>
+
+        <!-- TO -->
+        <div class="endpoint-row">
+            <div class="endpoint-head">
+                <span class="endpoint-label" data-i18n="to">Προορισμός</span>
             </div>
+            <div class="search-wrap">
+                <input type="text" id="toInput" autocomplete="off" placeholder="π.χ. Θεσσαλονίκη…">
+                <div class="geo-results" id="toResults"></div>
+            </div>
+            <div class="quick-chips" id="toQuick"></div>
         </div>
 
         <label data-i18n="vehicle">Όχημα</label>

@@ -1,44 +1,70 @@
 'use strict';
 /* GreekTolls — route toll calculator for Greek motorways.
-   Data: tolls.json (curated). Routing: OSRM public demo server. */
+   Data: tolls.json (curated). Routing: OSRM public demo server (with retry). */
 
 let LANG = localStorage.getItem('gtLang') || 'el';
 let VEHICLE = localStorage.getItem('gtVehicle') || 'moto';
 let ROUND_TRIP = false;
 let FUEL_ON = false;
-let CITIES = [];
 let LAST_RESULT = null;
+// Resolved endpoints: {name: {el, en}, lat, lon}
+let FROM_POINT = null;
+let TO_POINT = null;
 
 const OSRM = 'https://router.project-osrm.org/route/v1/driving/';
+const OSRM_RETRIES = 2;
+const GEOCODE = 'https://geocoding-api.open-meteo.com/v1/search?name=';
 
 const I18N = {
     el: {
-        tagline: 'Υπολόγισε το κόστος διόδιας για το ταξίδι σου',
+        tagline: 'Υπολόγισε τα διόδια του ταξιδιού σου',
         from: 'Αφετηρία', to: 'Προορισμός', vehicle: 'Όχημα',
+        search_ph_from: 'π.χ. Αθήνα ή όνομα περιοχής…',
+        search_ph_to: 'π.χ. Θεσσαλονίκη…',
+        use_gps: 'Τοποθεσία μου',
         round_trip: '↔ Μετ\' επιστροφής', fuel_toggle: '⛽ Υπολογ. καυσίμων',
         consumption: 'Κατανάλωση (L/100km)', fuel_price: 'Τιμή καυσίμου (€/L)',
         calculate: 'Υπολογισμός', total_tolls: 'Συνολικά διόδια',
         stations_on_route: 'Σταθμοί στη διαδρομή', share: 'Μοιράσου',
         report_price: 'Λάθος τιμή;', disclaimer: 'Ενδεικτικές τιμές μετρητά, τελευταία ενημέρωση Αύγουστος 2026. Οι τιμές μπορεί να έχουν αλλάξει — αναφέρετε ασυμφωνίες.',
+        err_no_location: 'Διάλεξε αφετηρία και προορισμό πρώτα.',
+        err_same: 'Αφετηρία και προορισμός είναι ίδιες.',
         err_route: 'Δεν βρέθηκε διαδρομή μεταξύ αυτών των σημείων.',
-        err_generic: 'Σφάλμα. Δοκίμασε ξανά.',
+        err_service: 'Η υπηρεσία διαδρομών δεν αποκρίθηκε — δοκίμασε ξανά σε λίγο.',
+        err_geocode: 'Δεν βρέθηκε η τοποθεσία. Δοκίμασε άλλο όνομα.',
+        err_gps: 'Δεν δόθηκε πρόσβαση στην τοποθεσία.',
+        searching: 'Αναζήτηση…',
+        locating: 'Εντοπισμός…',
         tolls: 'Διόδια', distance: 'Απόσταση', duration: 'Χρόνος', fuel_cost: 'Καύσιμα (εκτ.)',
+        stations_count: 'Σταθμοί', trip_total: 'Σύνολο ταξιδιού',
         roundtrip_note: '(μετ\' επιστροφής)',
-        via: 'μέσω'
+        no_stations: 'Κανένας σταθμός διοδίων στη διαδρομή 🎉',
+        copied: 'Αντιγράφηκε!'
     },
     en: {
-        tagline: 'Calculate toll costs for your trip in Greece',
+        tagline: 'Calculate the tolls for your trip',
         from: 'From', to: 'To', vehicle: 'Vehicle',
+        search_ph_from: 'e.g. Athens or area name…',
+        search_ph_to: 'e.g. Thessaloniki…',
+        use_gps: 'My location',
         round_trip: '↔ Round trip', fuel_toggle: '⛽ Fuel estimate',
         consumption: 'Consumption (L/100km)', fuel_price: 'Fuel price (€/L)',
         calculate: 'Calculate', total_tolls: 'Total tolls',
         stations_on_route: 'Stations on route', share: 'Share',
         report_price: 'Wrong price?', disclaimer: 'Indicative cash prices, last updated August 2026. Prices may have changed — report discrepancies.',
+        err_no_location: 'Pick a start and destination first.',
+        err_same: 'Start and destination are the same.',
         err_route: 'No route found between these points.',
-        err_generic: 'Error. Try again.',
+        err_service: 'Routing service didn\'t respond — try again shortly.',
+        err_geocode: 'Location not found. Try another name.',
+        err_gps: 'Location access denied.',
+        searching: 'Searching…',
+        locating: 'Locating…',
         tolls: 'Tolls', distance: 'Distance', duration: 'Time', fuel_cost: 'Fuel (est.)',
+        stations_count: 'Stations', trip_total: 'Trip total',
         roundtrip_note: '(round trip)',
-        via: 'via'
+        no_stations: 'No toll stations on this route 🎉',
+        copied: 'Copied!'
     }
 };
 
@@ -50,12 +76,12 @@ const VEHICLES = [
     { id: 'truck', cat: 3, label: { el: 'Φορτηγό', en: 'Truck' }, icon: '<svg viewBox="0 0 24 24"><rect x="1" y="5" width="13" height="11" rx="1"/><path d="M14 8h4.5L22 12v4h-3m-14 0h7"/><circle cx="5.5" cy="17.5" r="1.8"/><circle cx="16.5" cy="17.5" r="1.8"/></svg>' }
 ];
 
-// Major cities/waypoints for the dropdowns (lat, lon)
-const CITY_LIST = [
+// Quick-pick popular land destinations (no islands — land tolls only).
+// Users can also free-text-search any location.
+const QUICK_PICKS = [
     { name: { el: 'Αθήνα', en: 'Athens' }, lat: 37.9838, lon: 23.7275 },
     { name: { el: 'Θεσσαλονίκη', en: 'Thessaloniki' }, lat: 40.6401, lon: 22.9444 },
     { name: { el: 'Πάτρα', en: 'Patras' }, lat: 38.2466, lon: 21.7346 },
-    { name: { el: 'Ηράκλειο', en: 'Heraklion' }, lat: 35.3387, lon: 25.1442 },
     { name: { el: 'Λάρισα', en: 'Larissa' }, lat: 39.6390, lon: 22.4191 },
     { name: { el: 'Βόλος', en: 'Volos' }, lat: 39.3622, lon: 22.9422 },
     { name: { el: 'Ιωάννινα', en: 'Ioannina' }, lat: 39.6624, lon: 20.8519 },
@@ -79,9 +105,8 @@ const CITY_LIST = [
     { name: { el: 'Βέροια', en: 'Veroia' }, lat: 40.5231, lon: 22.2027 },
     { name: { el: 'Ξάνθη', en: 'Xanthi' }, lat: 41.1350, lon: 24.8882 },
     { name: { el: 'Κομοτηνή', en: 'Komotini' }, lat: 41.1194, lon: 25.4054 },
-    { name: { el: 'Ρόδος', en: 'Rhodes' }, lat: 36.4456, lon: 28.2229 },
-    { name: { el: 'Κέρκυρα', en: 'Corfu' }, lat: 39.6243, lon: 19.9217 },
-    { name: { el: 'Χανιά', en: 'Chania' }, lat: 35.5118, lon: 24.0180 }
+    { name: { el: 'Φλώρινα', en: 'Florina' }, lat: 40.7835, lon: 21.4086 },
+    { name: { el: 'Δράμα', en: 'Drama' }, lat: 41.1518, lon: 24.1477 }
 ];
 
 const $ = (id) => document.getElementById(id);
@@ -91,32 +116,114 @@ const t = (key) => (I18N[LANG] && I18N[LANG][key]) || I18N.el[key] || key;
 async function main() {
     const res = await fetch('tolls.json');
     const data = await res.json();
-    CITIES = data; // keep stations accessible
     window.TOLL_DATA = data;
 
-    populateSelects();
+    FROM_POINT = QUICK_PICKS[0]; // Athens
+    TO_POINT = QUICK_PICKS[1];   // Thessaloniki
+
+    buildQuickPicks();
     renderVehicleButtons();
     applyLang();
+
     $('langBtn').addEventListener('click', () => {
         LANG = LANG === 'el' ? 'en' : 'el';
         localStorage.setItem('gtLang', LANG);
-        populateSelects();
         applyLang();
         renderVehicleButtons();
     });
+
+    setupSearch('fromInput', 'fromResults', (p) => { FROM_POINT = p; updateEndpointLabels(); });
+    setupSearch('toInput', 'toResults', (p) => { TO_POINT = p; updateEndpointLabels(); });
 }
 
-function populateSelects() {
-    const fromSel = $('fromSel');
-    const toSel = $('toSel');
-    fromSel.innerHTML = '';
-    toSel.innerHTML = '';
-    CITY_LIST.forEach((c, i) => {
-        fromSel.add(new Option(c.name[LANG], i));
-        toSel.add(new Option(c.name[LANG], i));
+function buildQuickPicks() {
+    ['fromQuick', 'toQuick'].forEach(containerId => {
+        const cont = $(containerId);
+        cont.innerHTML = '';
+        QUICK_PICKS.slice(0, 8).forEach(city => {
+            const chip = document.createElement('button');
+            chip.className = 'quick-chip';
+            chip.textContent = city.name[LANG];
+            chip.onclick = () => {
+                if (containerId === 'fromQuick') FROM_POINT = city;
+                else TO_POINT = city;
+                updateEndpointLabels();
+            };
+            cont.appendChild(chip);
+        });
     });
-    fromSel.value = '0';  // Athens
-    toSel.value = '1';    // Thessaloniki
+}
+
+function updateEndpointLabels() {
+    const fromInput = $('fromInput'), toInput = $('toInput');
+    if (FROM_POINT && fromInput && document.activeElement !== fromInput) {
+        fromInput.placeholder = '📍 ' + FROM_POINT.name[LANG];
+    }
+    if (TO_POINT && toInput && document.activeElement !== toInput) {
+        toInput.placeholder = '📍 ' + TO_POINT.name[LANG];
+    }
+}
+
+// Free-text geocoding search via Open-Meteo
+function setupSearch(inputId, resultsId, onPick) {
+    const input = $(inputId);
+    const resultsBox = $(resultsId);
+    let debounceTimer = null;
+
+    input.addEventListener('input', () => {
+        clearTimeout(debounceTimer);
+        const q = input.value.trim();
+        if (q.length < 2) { resultsBox.innerHTML = ''; return; }
+        debounceTimer = setTimeout(async () => {
+            try {
+                const url = `${GEOCODE}${encodeURIComponent(q)}&count=5&language=${LANG}&format=json`;
+                const res = await fetch(url);
+                const data = await res.json();
+                resultsBox.innerHTML = '';
+                if (!data.results || !data.results.length) return;
+                data.results.forEach(place => {
+                    const div = document.createElement('div');
+                    div.className = 'geo-result';
+                    const label = [place.name, place.admin1, place.country_code]
+                        .filter(Boolean).join(', ');
+                    div.textContent = label;
+                    div.onclick = () => {
+                        onPick({
+                            name: { el: place.name, en: place.name },
+                            lat: place.latitude,
+                            lon: place.longitude
+                        });
+                        input.value = place.name;
+                        resultsBox.innerHTML = '';
+                        updateEndpointLabels();
+                    };
+                    resultsBox.appendChild(div);
+                });
+            } catch (e) { console.error(e); }
+        }, 400);
+    });
+
+    // dismiss results when clicking elsewhere
+    document.addEventListener('click', (e) => {
+        if (!resultsBox.contains(e.target) && e.target !== input) resultsBox.innerHTML = '';
+    });
+}
+
+async function useGpsOrigin() {
+    if (!navigator.geolocation) return;
+    $('gpsBtn').textContent = t('locating');
+    navigator.geolocation.getCurrentPosition((pos) => {
+        FROM_POINT = {
+            name: { el: 'Η τοποθεσία μου', en: 'My location' },
+            lat: pos.coords.latitude,
+            lon: pos.coords.longitude
+        };
+        $('gpsBtn').textContent = '📍 ' + t('use_gps');
+        updateEndpointLabels();
+    }, () => {
+        $('gpsBtn').textContent = '📍 ' + t('use_gps');
+        showError(t('err_gps'));
+    }, { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 });
 }
 
 function renderVehicleButtons() {
@@ -144,13 +251,16 @@ function applyLang() {
     document.title = LANG === 'el'
         ? 'GreekTolls — Υπολογισμός Διοδίων Ελλάδας'
         : 'GreekTolls — Greece Toll Calculator';
+    // re-translate quick chips
+    buildQuickPicks();
+    updateEndpointLabels();
 }
 
 function swapCities() {
-    const f = $('fromSel'), to = $('toSel');
-    const tmp = f.value;
-    f.value = to.value;
-    to.value = tmp;
+    const tmp = FROM_POINT;
+    FROM_POINT = TO_POINT;
+    TO_POINT = tmp;
+    updateEndpointLabels();
 }
 
 function toggleRoundTrip() {
@@ -171,10 +281,34 @@ function showError(msg) {
     setTimeout(() => { box.style.display = 'none'; }, 6000);
 }
 
+// Fetch with retries and exponential backoff for flaky public routers
+async function fetchRouteWithRetry(url) {
+    let lastErr = null;
+    for (let attempt = 0; attempt <= OSRM_RETRIES; attempt++) {
+        try {
+            const res = await fetch(url);
+            const data = await res.json();
+            if (data.code === 'Ok' && data.routes && data.routes.length) return data;
+            // "NoRoute" is a definitive answer — don't retry
+            if (data.code === 'NoRoute') throw Object.assign(new Error(t('err_route')), { definitive: true });
+            lastErr = new Error(data.code || 'route error');
+        } catch (e) {
+            if (e.definitive) throw e;
+            lastErr = e;
+        }
+        if (attempt < OSRM_RETRIES) {
+            await new Promise(r => setTimeout(r, 800 * Math.pow(2, attempt)));
+        }
+    }
+    throw lastErr || new Error('routing failed');
+}
+
 async function calculate() {
-    const from = CITY_LIST[parseInt($('fromSel').value, 10)];
-    const to = CITY_LIST[parseInt($('toSel').value, 10)];
-    if (!from || !to || from === to) return;
+    if (!FROM_POINT || !TO_POINT) { showError(t('err_no_location')); return; }
+    if (FROM_POINT === TO_POINT ||
+        (FROM_POINT.lat === TO_POINT.lat && FROM_POINT.lon === TO_POINT.lon)) {
+        showError(t('err_same')); return;
+    }
 
     const btn = $('calcBtn');
     btn.disabled = true;
@@ -182,16 +316,12 @@ async function calculate() {
     $('results').style.display = 'none';
 
     try {
-        const url = `${OSRM}${from.lon},${from.lat};${to.lon},${to.lat}?overview=false&alternatives=false&steps=false`;
-        const res = await fetch(url);
-        const data = await res.json();
-        if (data.code !== 'Ok' || !data.routes || !data.routes.length) {
-            throw new Error(t('err_route'));
-        }
+        const url = `${OSRM}${FROM_POINT.lon},${FROM_POINT.lat};${TO_POINT.lon},${TO_POINT.lat}?overview=full&alternatives=false&steps=false`;
+        const data = await fetchRouteWithRetry(url);
+
         const route = data.routes[0];
         const distKm = route.distance / 1000;
         const durMin = Math.round(route.duration / 60);
-        // Decode OSRM polyline (precision 5) to sample route points
         const pts = decodePolyline(route.geometry);
 
         const veh = VEHICLES.find(v => v.id === VEHICLE);
@@ -206,11 +336,11 @@ async function calculate() {
             fuelCost = (distKm / 100) * cons * price * (ROUND_TRIP ? 2 : 1);
         }
 
-        renderResult({ from, to, distKm, durMin, matched, oneWay, total, fuelCost });
-        LAST_RESULT = { from, to, distKm, durMin, matched, total, fuelCost };
+        renderResult({ from: FROM_POINT, to: TO_POINT, distKm, durMin, matched, oneWay, total, fuelCost });
+        LAST_RESULT = { from: FROM_POINT, to: TO_POINT, distKm, durMin, matched, total, fuelCost };
     } catch (e) {
         console.error(e);
-        showError(e.message === t('err_route') ? t('err_route') : t('err_generic'));
+        showError(e.message && e.message !== 'Error' && e.definitive ? t('err_route') : t('err_service'));
     } finally {
         btn.disabled = false;
         $('loader').style.display = 'none';
@@ -221,8 +351,7 @@ async function calculate() {
 function matchTolls(routePts, vehicleCat) {
     const matched = [];
     const seen = new Set();
-    // sample every ~5th point for speed
-    for (let i = 0; i < routePts.length; i += 5) {
+    for (let i = 0; i < routePts.length; i += 3) {
         const [lon, lat] = routePts[i];
         window.TOLL_DATA.stations.forEach(st => {
             if (seen.has(st.id)) return;
@@ -233,7 +362,6 @@ function matchTolls(routePts, vehicleCat) {
             }
         });
     }
-    // sort by road then name for stable listing
     matched.sort((a, b) => a.station.road.localeCompare(b.station.road) || a.station.name[LANG].localeCompare(b.station.name[LANG]));
     return matched;
 }
@@ -248,13 +376,13 @@ function renderResult({ from, to, distKm, durMin, matched, total, fuelCost }) {
         (ROUND_TRIP ? ` <span style="color:var(--accent)">${t('roundtrip_note')}</span>` : '');
 
     const stats = [
-        { v: fmt(ROUND_TRIP ? total : total), k: t('tolls') },
+        { v: fmt(total), k: t('tolls') },
         { v: Math.round(ROUND_TRIP ? distKm * 2 : distKm) + ' km', k: t('distance') },
-        { v: matched.length + (ROUND_TRIP ? ' ×2' : ''), k: LANG === 'el' ? 'Σταθμοί' : 'Stations' }
+        { v: matched.length + (ROUND_TRIP ? ' ×2' : ''), k: t('stations_count') }
     ];
     if (fuelCost !== null) {
         stats.push({ v: fmt(fuelCost), k: t('fuel_cost') });
-        stats.push({ v: fmt(total + fuelCost), k: LANG === 'el' ? 'Σύνολο ταξιδιού' : 'Trip total' });
+        stats.push({ v: fmt(total + fuelCost), k: t('trip_total') });
     }
     $('subStats').innerHTML = stats.map(s =>
         `<div class="sub-stat"><div class="v">${s.v}</div><div class="k">${s.k}</div></div>`
@@ -266,10 +394,10 @@ function renderResult({ from, to, distKm, durMin, matched, total, fuelCost }) {
                 <span class="station-road">${m.station.road} · ${m.station.op}</span></span>
             <span class="station-price">${fmt(m.price)}</span>
         </li>`
-    ).join('') || `<li class="station-item" style="color:var(--text-dim)">${LANG === 'el' ? 'Κανένας σταθμός διοδίων στη διαδρομή 🎉' : 'No toll stations on this route 🎉'}</li>`;
+    ).join('') || `<li class="station-item" style="color:var(--text-dim)">${t('no_stations')}</li>`;
 
     // Report link: prefilled mailto
-    const subject = encodeURIComponent('GreekTolls: Λάθος τιμή διόδιας');
+    const subject = encodeURIComponent('GreekTolls: Λάθος τιμή διοδίων');
     const body = encodeURIComponent(
         `Διαδρομή: ${from.name.el} → ${to.name.el}\n` +
         `Όχημα: ${VEHICLE}\n` +
@@ -286,13 +414,13 @@ async function shareResult() {
     if (!LAST_RESULT) return;
     const r = LAST_RESULT;
     const text = LANG === 'el'
-        ? `${r.from.name.el} → ${r.to.name.el}: ${fmt(r.total)} διόδια, ${Math.round(r.distKm)} km${ROUND_TRIP ? ' (μετ\' επιστροφής)' : ''} — GreekTolls`
-        : `${r.from.name.en} → ${r.to.name.en}: ${fmt(r.total)} in tolls, ${Math.round(r.distKm)} km${ROUND_TRIP ? ' (round trip)' : ''} — GreekTolls`;
+        ? `${r.from.name.el} → ${r.to.name.el}: Διόδια ${fmt(r.total)}, ${Math.round(r.distKm)} km${ROUND_TRIP ? ' (μετ\' επιστροφής)' : ''} — GreekTolls`
+        : `${r.from.name.en} → ${r.to.name.en}: Tolls ${fmt(r.total)}, ${Math.round(r.distKm)} km${ROUND_TRIP ? ' (round trip)' : ''} — GreekTolls`;
     if (navigator.share) {
         try { await navigator.share({ text }); } catch (e) { /* cancelled */ }
     } else {
         navigator.clipboard.writeText(text);
-        alert(LANG === 'el' ? 'Αντιγράφηκε!' : 'Copied!');
+        alert(t('copied'));
     }
 }
 
