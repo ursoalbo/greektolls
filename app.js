@@ -17,12 +17,12 @@ const I18N = {
         from: 'Αφετηρία', to: 'Προορισμός', vehicle: 'Όχημα',
         round_trip: '↔ Μετ\' επιστροφής', fuel_toggle: '⛽ Υπολογ. καυσίμων',
         consumption: 'Κατανάλωση (L/100km)', fuel_price: 'Τιμή καυσίμου (€/L)',
-        calculate: 'Υπολογισμός', total_tolls: 'Συνολικά δίodia',
+        calculate: 'Υπολογισμός', total_tolls: 'Συνολικά διόδια',
         stations_on_route: 'Σταθμοί στη διαδρομή', share: 'Μοιράσου',
         report_price: 'Λάθος τιμή;', disclaimer: 'Ενδεικτικές τιμές μετρητά, τελευταία ενημέρωση Αύγουστος 2026. Οι τιμές μπορεί να έχουν αλλάξει — αναφέρετε ασυμφωνίες.',
         err_route: 'Δεν βρέθηκε διαδρομή μεταξύ αυτών των σημείων.',
         err_generic: 'Σφάλμα. Δοκίμασε ξανά.',
-        tolls: 'Δίodia', distance: 'Απόσταση', duration: 'Χρόνος', fuel_cost: 'Καύσιμα (εκτ.)',
+        tolls: 'Διόδια', distance: 'Απόσταση', duration: 'Χρόνος', fuel_cost: 'Καύσιμα (εκτ.)',
         roundtrip_note: '(μετ\' επιστροφής)',
         via: 'μέσω'
     },
@@ -286,7 +286,7 @@ async function shareResult() {
     if (!LAST_RESULT) return;
     const r = LAST_RESULT;
     const text = LANG === 'el'
-        ? `${r.from.name.el} → ${r.to.name.el}: ${fmt(r.total)} δίodia, ${Math.round(r.distKm)} km${ROUND_TRIP ? ' (μετ\' επιστροφής)' : ''} — GreekTolls`
+        ? `${r.from.name.el} → ${r.to.name.el}: ${fmt(r.total)} διόδια, ${Math.round(r.distKm)} km${ROUND_TRIP ? ' (μετ\' επιστροφής)' : ''} — GreekTolls`
         : `${r.from.name.en} → ${r.to.name.en}: ${fmt(r.total)} in tolls, ${Math.round(r.distKm)} km${ROUND_TRIP ? ' (round trip)' : ''} — GreekTolls`;
     if (navigator.share) {
         try { await navigator.share({ text }); } catch (e) { /* cancelled */ }
