@@ -114,17 +114,12 @@ const fmt = (n) => n.toFixed(2) + ' €';
 const t = (key) => (I18N[LANG] && I18N[LANG][key]) || I18N.el[key] || key;
 
 async function main() {
-    const res = await fetch('tolls.json');
-    const data = await res.json();
-    window.TOLL_DATA = data;
-
     FROM_POINT = QUICK_PICKS[0]; // Athens
     TO_POINT = QUICK_PICKS[1];   // Thessaloniki
 
-    buildQuickPicks();
-    renderVehicleButtons();
-    applyLang();
-
+    // Attach all UI wiring FIRST so the page is interactive even if data loading fails
+    setupSearch('fromInput', 'fromResults', (p) => { FROM_POINT = p; updateEndpointLabels(); });
+    setupSearch('toInput', 'toResults', (p) => { TO_POINT = p; updateEndpointLabels(); });
     $('langBtn').addEventListener('click', () => {
         LANG = LANG === 'el' ? 'en' : 'el';
         localStorage.setItem('gtLang', LANG);
@@ -132,8 +127,17 @@ async function main() {
         renderVehicleButtons();
     });
 
-    setupSearch('fromInput', 'fromResults', (p) => { FROM_POINT = p; updateEndpointLabels(); });
-    setupSearch('toInput', 'toResults', (p) => { TO_POINT = p; updateEndpointLabels(); });
+    buildQuickPicks();
+    renderVehicleButtons();
+    applyLang();
+
+    // Load toll data last; calculate() guards on it
+    try {
+        const res = await fetch('tolls.json');
+        window.TOLL_DATA = await res.json();
+    } catch (e) {
+        console.error('tolls.json failed to load', e);
+    }
 }
 
 function buildQuickPicks() {
@@ -304,6 +308,7 @@ async function fetchRouteWithRetry(url) {
 }
 
 async function calculate() {
+    if (!window.TOLL_DATA) { showError(t('err_service')); return; }
     if (!FROM_POINT || !TO_POINT) { showError(t('err_no_location')); return; }
     if (FROM_POINT === TO_POINT ||
         (FROM_POINT.lat === TO_POINT.lat && FROM_POINT.lon === TO_POINT.lon)) {
