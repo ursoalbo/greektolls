@@ -72,20 +72,6 @@
         .geo-result:last-child { border-bottom: none; }
         .geo-result:hover { background: rgba(255,159,67,0.1); color: var(--accent); }
 
-        .quick-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-        .quick-chip {
-            padding: 5px 12px;
-            border-radius: 20px;
-            border: 1px solid var(--border-color);
-            background: rgba(0,0,0,0.25);
-            color: var(--text-dim);
-            font-size: 0.8rem;
-            cursor: pointer;
-            font-family: inherit;
-            transition: all 0.15s;
-        }
-        .quick-chip:hover { border-color: var(--accent); color: var(--accent); }
-
         .gps-btn {
             padding: 5px 12px;
             border-radius: 20px;
@@ -259,7 +245,6 @@
                 <input type="text" id="fromInput" autocomplete="off" placeholder="π.χ. Αθήνα…">
                 <div class="geo-results" id="fromResults"></div>
             </div>
-            <div class="quick-chips" id="fromQuick"></div>
         </div>
 
         <div class="row-swap">
@@ -275,7 +260,6 @@
                 <input type="text" id="toInput" autocomplete="off" placeholder="π.χ. Θεσσαλονίκη…">
                 <div class="geo-results" id="toResults"></div>
             </div>
-            <div class="quick-chips" id="toQuick"></div>
         </div>
 
         <label data-i18n="vehicle">Όχημα</label>
@@ -318,6 +302,6 @@
 
     <p class="disclaimer" data-i18n="disclaimer">Ενδεικτικές τιμές μετρητά, τελευταία ενημέρωση Αύγουστος 2026. Οι τιμές μπορεί να έχουν αλλάξει — αναφέρετε ασυμφωνίες.</p>
 
-    <script src="app.js?v=2"></script>
+    <script src="app.js?v=3"></script>
 </body>
 </html>

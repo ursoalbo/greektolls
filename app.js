@@ -32,7 +32,9 @@ const I18N = {
         err_route: 'Δεν βρέθηκε διαδρομή μεταξύ αυτών των σημείων.',
         err_service: 'Η υπηρεσία διαδρομών δεν αποκρίθηκε — δοκίμασε ξανά σε λίγο.',
         err_geocode: 'Δεν βρέθηκε η τοποθεσία. Δοκίμασε άλλο όνομα.',
-        err_gps: 'Δεν δόθηκε πρόσβαση στην τοποθεσία.',
+        err_gps: 'Δεν δόθηκε πρόσβαση στην τοποθεσία. Έλεγξε τις ρυθμίσεις του browser.',
+        err_gps_off: 'Το GPS της συσκευής είναι απενεργοποιημένο. Άνοιξέ το και δοκίμασε ξανά.',
+        err_gps_timeout: 'Δεν καταφέραμε να εντοπίσουμε τη θέση σου. Δοκίμασε ξανά.',
         searching: 'Αναζήτηση…',
         locating: 'Εντοπισμός…',
         tolls: 'Διόδια', distance: 'Απόσταση', duration: 'Χρόνος', fuel_cost: 'Καύσιμα (εκτ.)',
@@ -57,7 +59,9 @@ const I18N = {
         err_route: 'No route found between these points.',
         err_service: 'Routing service didn\'t respond — try again shortly.',
         err_geocode: 'Location not found. Try another name.',
-        err_gps: 'Location access denied.',
+        err_gps: 'Location access denied. Check your browser settings.',
+        err_gps_off: 'Device location services are off. Enable them and try again.',
+        err_gps_timeout: 'Couldn\'t get your position. Try again.',
         searching: 'Searching…',
         locating: 'Locating…',
         tolls: 'Tolls', distance: 'Distance', duration: 'Time', fuel_cost: 'Fuel (est.)',
@@ -140,23 +144,7 @@ async function main() {
     }
 }
 
-function buildQuickPicks() {
-    ['fromQuick', 'toQuick'].forEach(containerId => {
-        const cont = $(containerId);
-        cont.innerHTML = '';
-        QUICK_PICKS.slice(0, 8).forEach(city => {
-            const chip = document.createElement('button');
-            chip.className = 'quick-chip';
-            chip.textContent = city.name[LANG];
-            chip.onclick = () => {
-                if (containerId === 'fromQuick') FROM_POINT = city;
-                else TO_POINT = city;
-                updateEndpointLabels();
-            };
-            cont.appendChild(chip);
-        });
-    });
-}
+function buildQuickPicks() { /* removed: preset city chips */ }
 
 function updateEndpointLabels() {
     const fromInput = $('fromInput'), toInput = $('toInput');
@@ -207,6 +195,16 @@ function setupSearch(inputId, resultsId, onPick) {
         }, 400);
     });
 
+    // Selecting all text on focus lets users overwrite the current pick instantly
+    input.addEventListener('focus', () => {
+        if (input.value) input.select();
+        updateEndpointLabels();
+    });
+    input.addEventListener('blur', () => {
+        // If cleared without picking, restore the current selection as placeholder
+        setTimeout(updateEndpointLabels, 150);
+    });
+
     // dismiss results when clicking elsewhere
     document.addEventListener('click', (e) => {
         if (!resultsBox.contains(e.target) && e.target !== input) resultsBox.innerHTML = '';
@@ -214,20 +212,41 @@ function setupSearch(inputId, resultsId, onPick) {
 }
 
 async function useGpsOrigin() {
-    if (!navigator.geolocation) return;
-    $('gpsBtn').textContent = t('locating');
+    if (!navigator.geolocation) { showError(t('err_gps')); return; }
+    const btn = $('gpsBtn');
+    btn.disabled = true;
+    btn.textContent = '⏳ ' + t('locating');
+
+    const fail = (msgKey) => {
+        btn.disabled = false;
+        btn.textContent = '📍 ' + t('use_gps');
+        showError(t(msgKey));
+    };
+
+    // Ask while we have a fresh user gesture (critical on Android Chrome)
+    let sawPermissionPromptFallback = false;
     navigator.geolocation.getCurrentPosition((pos) => {
+        btn.disabled = false;
+        btn.textContent = '📍 ' + t('use_gps');
         FROM_POINT = {
             name: { el: 'Η τοποθεσία μου', en: 'My location' },
             lat: pos.coords.latitude,
             lon: pos.coords.longitude
         };
-        $('gpsBtn').textContent = '📍 ' + t('use_gps');
         updateEndpointLabels();
-    }, () => {
-        $('gpsBtn').textContent = '📍 ' + t('use_gps');
-        showError(t('err_gps'));
-    }, { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 });
+    }, (err) => {
+        console.warn('geolocation error:', err.code, err.message);
+        // 1 = permission denied, 2 = unavailable/OS location off, 3 = timeout
+        if (err.code === 1) fail('err_gps');
+        else if (err.code === 2) fail('err_gps_off');
+        else if (!sawPermissionPromptFallback) fail('err_gps_timeout');
+        else fail('err_gps');
+    }, {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 0   // force a fresh fix so Android shows the prompt
+    });
+    sawPermissionPromptFallback = true;
 }
 
 function renderVehicleButtons() {
@@ -355,19 +374,20 @@ async function calculate() {
 // Find tolls within ~2.5km of any route point (sampled)
 function matchTolls(routePts, vehicleCat) {
     const matched = [];
-    const seen = new Set();
+    const seen = new Map(); // id -> earliest route index
     for (let i = 0; i < routePts.length; i += 3) {
         const [lon, lat] = routePts[i];
         window.TOLL_DATA.stations.forEach(st => {
             if (seen.has(st.id)) return;
             const d = haversine(lat, lon, st.lat, st.lon);
             if (d < 2.5) {
-                seen.add(st.id);
-                matched.push({ station: st, price: st.prices[vehicleCat] });
+                seen.set(st.id, i);
+                matched.push({ station: st, price: st.prices[vehicleCat], routeIdx: i });
             }
         });
     }
-    matched.sort((a, b) => a.station.road.localeCompare(b.station.road) || a.station.name[LANG].localeCompare(b.station.name[LANG]));
+    // Order stations as they appear along the driven route
+    matched.sort((a, b) => a.routeIdx - b.routeIdx);
     return matched;
 }
 
