@@ -6,6 +6,7 @@ let LANG = localStorage.getItem('gtLang') || 'el';
 let VEHICLE = localStorage.getItem('gtVehicle') || 'moto';
 let ROUND_TRIP = false;
 let FUEL_ON = false;
+let FERRY_MODE = localStorage.getItem('gtFerry') === '1';
 let LAST_RESULT = null;
 // Resolved endpoints: {name: {el, en}, lat, lon}
 let FROM_POINT = null;
@@ -131,6 +132,7 @@ async function main() {
         renderVehicleButtons();
     });
 
+    if (FERRY_MODE) $('ferryBtn').classList.add('active');
     buildQuickPicks();
     renderVehicleButtons();
     applyLang();
@@ -225,7 +227,7 @@ async function useGpsOrigin() {
 
     // Ask while we have a fresh user gesture (critical on Android Chrome)
     let sawPermissionPromptFallback = false;
-    navigator.geolocation.getCurrentPosition((pos) => {
+    navigator.geolocation.getCurrentPosition(async (pos) => {
         btn.disabled = false;
         btn.textContent = '📍 ' + t('use_gps');
         FROM_POINT = {
@@ -233,6 +235,15 @@ async function useGpsOrigin() {
             lat: pos.coords.latitude,
             lon: pos.coords.longitude
         };
+        // Resolve a readable place name and put it in the field
+        try {
+            const rev = await fetch(`https://geocoding-api.open-meteo.com/v1/search?latitude=${pos.coords.latitude}&longitude=${pos.coords.longitude}&count=1&language=${LANG}&format=json`);
+            const rd = await rev.json();
+            if (rd.results && rd.results.length) {
+                FROM_POINT.name = { el: rd.results[0].name, en: rd.results[0].name };
+            }
+        } catch (e) { /* keep generic label */ }
+        $('fromInput').value = FROM_POINT.name[LANG];
         updateEndpointLabels();
     }, (err) => {
         console.warn('geolocation error:', err.code, err.message);
@@ -289,6 +300,12 @@ function swapCities() {
 function toggleRoundTrip() {
     ROUND_TRIP = !ROUND_TRIP;
     $('roundTripBtn').classList.toggle('active', ROUND_TRIP);
+}
+
+function toggleFerry() {
+    FERRY_MODE = !FERRY_MODE;
+    localStorage.setItem('gtFerry', FERRY_MODE ? '1' : '0');
+    $('ferryBtn').classList.toggle('active', FERRY_MODE);
 }
 
 function toggleFuel() {
@@ -349,8 +366,20 @@ async function calculate() {
         const pts = decodePolyline(route.geometry);
 
         const veh = VEHICLES.find(v => v.id === VEHICLE);
-        const matched = matchTolls(pts, veh.cat);
-        const oneWay = matched.reduce((s, m) => s + m.price, 0);
+        let matched = matchTolls(pts, veh.cat);
+
+        // Ferry alternative for Rio-Antirrio: swap bridge toll for indicative ferry fare
+        if (FERRY_MODE) {
+            const FERRY_PRICES = [5.50, 13.50, 21.00, 30.00]; // moto, car, van, truck
+            matched = matched.map(m => {
+                if (m.station.op === 'Gefyra') {
+                    return { ...m, price: FERRY_PRICES[veh.cat], viaFerry: true };
+                }
+                return m;
+            });
+        }
+
+        const oneWay = matched.reduce((acc, m) => acc + m.price, 0);
         const total = ROUND_TRIP ? oneWay * 2 : oneWay;
 
         let fuelCost = null;
@@ -380,7 +409,10 @@ function matchTolls(routePts, vehicleCat) {
         window.TOLL_DATA.stations.forEach(st => {
             if (seen.has(st.id)) return;
             const d = haversine(lat, lon, st.lat, st.lon);
-            if (d < 2.5) {
+            // Open-system tolls (Attiki Odos) charge by entry/exit, no single gate —
+            // use a wider net so routes through Athens still include them
+            const radius = st.op === 'Attiki Odos' ? 6 : 2.5;
+            if (d < radius) {
                 seen.set(st.id, i);
                 matched.push({ station: st, price: st.prices[vehicleCat], routeIdx: i });
             }
@@ -417,7 +449,7 @@ function renderResult({ from, to, distKm, durMin, matched, total, fuelCost }) {
         `<li class="station-item">
             <span class="station-name">${m.station.name[LANG]}
                 <span class="station-road">${m.station.road} · ${m.station.op}</span></span>
-            <span class="station-price">${fmt(m.price)}</span>
+            <span class="station-price">${m.viaFerry ? '⛴️ ' : ''}${fmt(m.price)}</span>
         </li>`
     ).join('') || `<li class="station-item" style="color:var(--text-dim)">${t('no_stations')}</li>`;
 
