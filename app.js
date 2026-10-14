@@ -1,5 +1,5 @@
 'use strict';
-/* GreekTolls v10 — Strict Route Sequence Chain + Optional Toll-Free Comparison */
+/* GreekTolls v11 — Dynamic Polyline Toll Matcher with Full Nationwide Coverage */
 
 let LANG = localStorage.getItem('gtLang') || 'el';
 let VEHICLE = localStorage.getItem('gtVehicle') || 'moto';
@@ -45,7 +45,7 @@ const I18N = {
         stations_on_route: 'Σταθμοί στη διαδρομή (πάτα για εστίαση)',
         open_maps: '🗺️ Google Maps', share: '📤 Μοιράσου',
         report_price: '⚠️ Λάθος τιμή;',
-        disclaimer: 'Τιμές 2026. Σειριακός αλγόριθμος αξόνων.',
+        disclaimer: 'Τιμές 2026. Δυναμικός αλγόριθμος πολυγραμμής.',
         err_no_location: 'Διάλεξε αφετηρία και προορισμό πρώτα.',
         err_same: 'Αφετηρία και προορισμός συμπίπτουν.',
         err_route: 'Δεν βρέθηκε οδική διαδρομή μεταξύ αυτών των σημείων.',
@@ -79,7 +79,7 @@ const I18N = {
         stations_on_route: 'Stations on route (tap to focus)',
         open_maps: '🗺️ Google Maps', share: '📤 Share',
         report_price: '⚠️ Wrong price?',
-        disclaimer: '2026 tariffs. Sequential axis algorithm.',
+        disclaimer: '2026 tariffs. Dynamic polyline algorithm.',
         err_no_location: 'Pick a start and destination first.',
         err_same: 'Start and destination are identical.',
         err_route: 'No driving route found between these points.',
@@ -440,7 +440,6 @@ async function fetchRouteOSRM(points, avoidTolls = false) {
     const coordString = points.map(p => `${p.lon},${p.lat}`).join(';');
     const query = `${coordString}?overview=full&alternatives=false&steps=false`;
 
-    // Αν είναι ενεργοποιημένο το "χωρίς διόδια", δοκιμάζουμε πρώτα Valhalla με αποφυγή διοδίων
     if (avoidTolls) {
         const valhallaRes = await fetchTollFreeValhalla(points);
         if (valhallaRes && valhallaRes.geometry) {
@@ -493,17 +492,11 @@ async function fetchTollFreeValhalla(points) {
         return {
             distKm: data.trip.summary.length,
             durMin: Math.round(data.trip.summary.time / 60),
-            geometry: data.trip.legs ? encodeValhallaShape(data.trip.legs) : null
+            geometry: null
         };
     } catch (e) {
         return null;
     }
-}
-
-// Minimal polyline decoder/encoder helper for Valhalla shapes if needed
-function encodeValhallaShape(legs) {
-    // Valhalla returns decoded coordinates or shape; if standard OSRM polyline is expected, we can fallback or handle geometry
-    return null; 
 }
 
 async function calculate() {
@@ -521,7 +514,6 @@ async function calculate() {
     $('loader').style.display = 'block';
 
     try {
-        // Ανάλογα με το αν είναι επιλεγμένο το "χωρίς διόδια", φέρνουμε την αντίστοιχη διαδρομή
         const [osrmData, tollFreeSummary] = await Promise.all([
             fetchRouteOSRM(allPoints, TOLL_FREE_MODE),
             TOLL_FREE_MODE ? Promise.resolve(null) : fetchTollFreeValhalla(allPoints)
@@ -530,7 +522,7 @@ async function calculate() {
         const route = osrmData.routes[0];
         const distKm = route.distance / 1000;
         const durMin = Math.round(route.duration / 60);
-        const pts = route.geometry ? (typeof route.geometry === 'string' ? decodePolyline(route.geometry) : []) : [];
+        const pts = route.geometry ? decodePolyline(route.geometry) : [];
 
         const veh = VEHICLES.find(v => v.id === VEHICLE);
         let matched = TOLL_FREE_MODE ? [] : matchTollsStrictChain(pts, veh.cat);
@@ -568,33 +560,38 @@ async function calculate() {
     }
 }
 
+// Δυναμική σάρωση πολυγραμμής με ανοχή 4.5km (καλύπτει Α1, Α2, Α8 Ολυμπία Οδό, Α7 Μορέα κλπ.)
 function matchTollsStrictChain(routePts, vehicleCat) {
     if (!window.TOLL_DATA || !window.TOLL_DATA.stations) return [];
 
-    const exactSequenceIds = [
-        "attiki_odos_east", "afidnes", "thiva_main", "tragana_main", 
-        "agia_triada", "mavromantila", "pelasgia", "moschochori", 
-        "makrychori_main", "leptokarya_main", "kleidi", "malgara", 
-        "thessaloniki", "analipsi", "asprovalta", "moustheni"
-    ];
-
-    const touchesSouth = routePts.some(([lon, lat]) => lat < 38.3 && lat > 37.9);
-    const touchesNorth = routePts.some(([lon, lat]) => lat > 40.5);
-
     const matched = [];
     const seen = new Set();
+    let attikiBilled = false;
 
-    exactSequenceIds.forEach((id, idx) => {
-        const st = window.TOLL_DATA.stations.find(s => s.id === id);
-        if (!st || seen.has(st.id)) return;
-
-        const nearRoute = routePts.some(([lon, lat]) => haversine(lat, lon, st.lat, st.lon) < 25.0);
+    for (let i = 0; i < routePts.length; i++) {
+        const [lon, lat] = routePts[i];
         
-        if (nearRoute || (touchesSouth && touchesNorth)) {
-            seen.add(st.id);
-            matched.push({ station: st, price: st.prices[vehicleCat], routeIdx: idx });
-        }
-    });
+        window.TOLL_DATA.stations.forEach(st => {
+            if (seen.has(st.id)) return;
+
+            const d = haversine(lat, lon, st.lat, st.lon);
+            if (d < 4.5) {
+                if (st.op === 'Attiki Odos') {
+                    if (!attikiBilled) {
+                        seen.add(st.id);
+                        matched.push({ station: st, price: st.prices[vehicleCat], routeIdx: i });
+                        attikiBilled = true;
+                    }
+                    return;
+                }
+
+                if (st.type === 'main' || st.type === 'special') {
+                    seen.add(st.id);
+                    matched.push({ station: st, price: st.prices[vehicleCat], routeIdx: i });
+                }
+            }
+        });
+    }
 
     return matched.sort((a, b) => a.routeIdx - b.routeIdx);
 }
@@ -690,7 +687,7 @@ function renderResult({ points, distKm, durMin, matched, total, fuelCost, tollFr
             </span>
             <span class="station-price">${m.viaFerry ? '⛴️ ' : ''}${fmt(m.price)}</span>
         </li>`
-    ).join('') || `<li class="station-item" style="color:var(--text-dim)">${isTollFree ? 'Μηδενικά διόδια (διαδρομή επαρχιακού δικτύου)' : t('no_stations')}</li>`;
+    ).join('') || `<li class="station-item" style="color:var(--text-dim)">${isTollFree ? 'Μηδενικά διόδια' : t('no_stations')}</li>`;
 
     const originParam = `${points[0].lat},${points[0].lon}`;
     const destParam = `${points[points.length - 1].lat},${points[points.length - 1].lon}`;
