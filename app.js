@@ -1,117 +1,123 @@
 'use strict';
-/* GreekTolls — route toll calculator for Greek motorways.
-   Data: tolls.json (curated). Routing: OSRM public demo server (with retry). */
+/* GreekTolls v5 — High-precision Greek motorway toll & road-trip calculator.
+   Free APIs: FOSSGIS OSRM + Valhalla OSM (routing/avoid-tolls), Komoot Photon (geocoding), OpenFreeMap + MapLibre (vector map). */
 
 let LANG = localStorage.getItem('gtLang') || 'el';
 let VEHICLE = localStorage.getItem('gtVehicle') || 'moto';
 let ROUND_TRIP = false;
-let FUEL_ON = false;
+let FUEL_ON = localStorage.getItem('gtFuelOn') === '1';
 let FERRY_MODE = localStorage.getItem('gtFerry') === '1';
+let PASSENGERS = 1;
 let LAST_RESULT = null;
-// Resolved endpoints: {name: {el, en}, lat, lon}
+
 let FROM_POINT = null;
 let TO_POINT = null;
+let WAYPOINTS = []; // Array of { id, point: {name:{el,en}, lat, lon} | null }
 
-const OSRM = 'https://router.project-osrm.org/route/v1/driving/';
-const OSRM_RETRIES = 2;
-const GEOCODE = 'https://geocoding-api.open-meteo.com/v1/search?name=';
+let map = null;
+let mapMarkers = [];
+
+// Free Keyless Endpoints
+const OSRM_SERVERS = [
+    'https://routing.openstreetmap.de/routed-car/route/v1/driving/',
+    'https://router.project-osrm.org/route/v1/driving/'
+];
+const VALHALLA_URL = 'https://valhalla1.openstreetmap.de/route';
+const PHOTON_SEARCH = 'https://photon.komoot.io/api/';
+const PHOTON_REVERSE = 'https://photon.komoot.io/reverse';
+const GR_BBOX = '19.3,34.8,29.7,41.8';
+
+const DEFAULT_CONSUMPTION = { moto: 4.5, car: 6.8, van: 9.5, truck: 28.0 };
 
 const I18N = {
     el: {
-        tagline: 'Υπολόγισε τα διόδια του ταξιδιού σου',
-        from: 'Αφετηρία', to: 'Προορισμός', vehicle: 'Όχημα',
-        search_ph_from: 'π.χ. Αθήνα ή όνομα περιοχής…',
-        search_ph_to: 'π.χ. Θεσσαλονίκη…',
-        use_gps: 'Τοποθεσία μου',
-        round_trip: '↔ Μετ\' επιστροφής', fuel_toggle: '⛽ Υπολογ. καυσίμων',
-        consumption: 'Κατανάλωση (L/100km)', fuel_price: 'Τιμή καυσίμου (€/L)',
-        calculate: 'Υπολογισμός', total_tolls: 'Συνολικά διόδια',
-        stations_on_route: 'Σταθμοί στη διαδρομή', share: 'Μοιράσου',
-        report_price: 'Λάθος τιμή;', disclaimer: 'Ενδεικτικές τιμές μετρητά, τελευταία ενημέρωση Αύγουστος 2026. Οι τιμές μπορεί να έχουν αλλάξει — αναφέρετε ασυμφωνίες.',
+        tagline: 'Υπολόγισε διόδια & οργάνωσε road trip',
+        toggle_map: '🗺️ Χάρτης',
+        from: 'Αφετηρία', to: 'Προορισμός', stop: 'Στάση', vehicle: 'Όχημα',
+        add_stop: '+ Προσθήκη στάσης',
+        use_gps: '📍 Τοποθεσία μου',
+        round_trip: '↔ Μετ\' επιστροφής',
+        ferry_rio: '⛴️ Φεριμπότ Ρίου',
+        fuel_toggle: '⛽ Καύσιμα',
+        consumption: 'Κατανάλωση (L/100km)', fuel_price: 'Τιμή (€/L)',
+        calculate: 'Υπολογισμός Διαδρομής', total_tolls: 'Συνολικά διόδια',
+        split_label: 'Κόστος ανά άτομο:',
+        stations_on_route: 'Σταθμοί στη διαδρομή (πάτα για εστίαση)',
+        open_maps: '🗺️ Google Maps', share: '📤 Μοιράσου',
+        report_price: '⚠️ Λάθος τιμή;',
+        disclaimer: 'Τιμές 2026 (ενημέρωση Οκτώβριος 2026). Αλγόριθμος ακριβείας με διαχωρισμό μετωπικών/πλευρικών σταθμών.',
         err_no_location: 'Διάλεξε αφετηρία και προορισμό πρώτα.',
-        err_same: 'Αφετηρία και προορισμός είναι ίδιες.',
-        err_route: 'Δεν βρέθηκε διαδρομή μεταξύ αυτών των σημείων.',
-        err_service: 'Η υπηρεσία διαδρομών δεν αποκρίθηκε — δοκίμασε ξανά σε λίγο.',
-        err_geocode: 'Δεν βρέθηκε η τοποθεσία. Δοκίμασε άλλο όνομα.',
-        err_gps: 'Δεν δόθηκε πρόσβαση στην τοποθεσία. Έλεγξε τις ρυθμίσεις του browser.',
-        err_gps_off: 'Το GPS της συσκευής είναι απενεργοποιημένο. Άνοιξέ το και δοκίμασε ξανά.',
-        err_gps_timeout: 'Δεν καταφέραμε να εντοπίσουμε τη θέση σου. Δοκίμασε ξανά.',
-        searching: 'Αναζήτηση…',
+        err_same: 'Αφετηρία και προορισμός συμπίπτουν.',
+        err_route: 'Δεν βρέθηκε οδική διαδρομή μεταξύ αυτών των σημείων.',
+        err_service: 'Η υπηρεσία δρομολόγησης καθυστέρησε — δοκίμασε ξανά.',
+        err_gps: 'Δεν δόθηκε πρόσβαση στην τοποθεσία.',
+        err_gps_off: 'Το GPS είναι απενεργοποιημένο.',
+        err_gps_timeout: 'Εξάντληση χρόνου εύρεσης GPS.',
         locating: 'Εντοπισμός…',
-        tolls: 'Διόδια', distance: 'Απόσταση', duration: 'Χρόνος', fuel_cost: 'Καύσιμα (εκτ.)',
-        stations_count: 'Σταθμοί', trip_total: 'Σύνολο ταξιδιού',
+        tolls: 'Διόδια', distance: 'Απόσταση', duration: 'Χρόνος', fuel_cost: 'Καύσιμα',
+        stations_count: 'Σταθμοί', trip_total: 'Σύνολο (Διόδια+Καύσιμα)',
         roundtrip_note: '(μετ\' επιστροφής)',
         no_stations: 'Κανένας σταθμός διοδίων στη διαδρομή 🎉',
-        copied: 'Αντιγράφηκε!'
+        copied: 'Το link της διαδρομής αντιγράφηκε!',
+        type_main: 'Μετωπικός', type_side: 'Πλευρικός', type_special: 'Ειδικός',
+        alt_free_prefix: 'Χωρίς διόδια:',
+        alt_saves: 'Εξοικονόμηση'
     },
     en: {
-        tagline: 'Calculate the tolls for your trip',
-        from: 'From', to: 'To', vehicle: 'Vehicle',
-        search_ph_from: 'e.g. Athens or area name…',
-        search_ph_to: 'e.g. Thessaloniki…',
-        use_gps: 'My location',
-        round_trip: '↔ Round trip', fuel_toggle: '⛽ Fuel estimate',
+        tagline: 'Calculate tolls & plan your road trip',
+        toggle_map: '🗺️ Map',
+        from: 'From', to: 'To', stop: 'Stop', vehicle: 'Vehicle',
+        add_stop: '+ Add stop',
+        use_gps: '📍 My location',
+        round_trip: '↔ Round trip',
+        ferry_rio: '⛴️ Rio Ferry',
+        fuel_toggle: '⛽ Fuel estimate',
         consumption: 'Consumption (L/100km)', fuel_price: 'Fuel price (€/L)',
-        calculate: 'Calculate', total_tolls: 'Total tolls',
-        stations_on_route: 'Stations on route', share: 'Share',
-        report_price: 'Wrong price?', disclaimer: 'Indicative cash prices, last updated August 2026. Prices may have changed — report discrepancies.',
+        calculate: 'Calculate Route', total_tolls: 'Total tolls',
+        split_label: 'Cost per person:',
+        stations_on_route: 'Stations on route (tap to focus)',
+        open_maps: '🗺️ Google Maps', share: '📤 Share',
+        report_price: '⚠️ Wrong price?',
+        disclaimer: '2026 tariffs (updated October 2026). Precision matcher distinguishes frontal and lateral toll plazas.',
         err_no_location: 'Pick a start and destination first.',
-        err_same: 'Start and destination are the same.',
-        err_route: 'No route found between these points.',
-        err_service: 'Routing service didn\'t respond — try again shortly.',
-        err_geocode: 'Location not found. Try another name.',
-        err_gps: 'Location access denied. Check your browser settings.',
-        err_gps_off: 'Device location services are off. Enable them and try again.',
-        err_gps_timeout: 'Couldn\'t get your position. Try again.',
-        searching: 'Searching…',
+        err_same: 'Start and destination are identical.',
+        err_route: 'No driving route found between these points.',
+        err_service: 'Routing service timed out — please retry.',
+        err_gps: 'Location permission denied.',
+        err_gps_off: 'Device location services are turned off.',
+        err_gps_timeout: 'GPS request timed out.',
         locating: 'Locating…',
-        tolls: 'Tolls', distance: 'Distance', duration: 'Time', fuel_cost: 'Fuel (est.)',
-        stations_count: 'Stations', trip_total: 'Trip total',
+        tolls: 'Tolls', distance: 'Distance', duration: 'Duration', fuel_cost: 'Fuel',
+        stations_count: 'Stations', trip_total: 'Total (Tolls+Fuel)',
         roundtrip_note: '(round trip)',
         no_stations: 'No toll stations on this route 🎉',
-        copied: 'Copied!'
+        copied: 'Route link copied to clipboard!',
+        type_main: 'Frontal', type_side: 'Lateral', type_special: 'Special',
+        alt_free_prefix: 'Toll-free route:',
+        alt_saves: 'Save'
     }
 };
 
-// Vehicle classes: all 4 Greek toll categories
 const VEHICLES = [
-    { id: 'moto', cat: 0, label: { el: 'Μοτοσυκλέτα', en: 'Motorcycle' }, icon: '<svg viewBox="0 0 24 24"><circle cx="5.5" cy="17.5" r="3.5"/><circle cx="18.5" cy="17.5" r="3.5"/><path d="M15 6a1 1 0 1 0 0-2 1 1 0 0 0 0 2zm-1 1h-3l-2 5 3 3h2m-5-3-2 5.5M12 12l4.5 4L18 17.5"/></svg>' },
+    { id: 'moto', cat: 0, label: { el: 'Μηχανή', en: 'Moto' }, icon: '<svg viewBox="0 0 24 24"><circle cx="5.5" cy="17.5" r="3.5"/><circle cx="18.5" cy="17.5" r="3.5"/><path d="M15 6a1 1 0 1 0 0-2 1 1 0 0 0 0 2zm-1 1h-3l-2 5 3 3h2m-5-3-2 5.5M12 12l4.5 4L18 17.5"/></svg>' },
     { id: 'car', cat: 1, label: { el: 'Αυτοκίνητο', en: 'Car' }, icon: '<svg viewBox="0 0 24 24"><path d="M5 11l1.5-4.5A2 2 0 0 1 8.4 5h7.2a2 2 0 0 1 1.9 1.5L19 11m-14 0h14a1 1 0 0 1 1 1v4h-2m-12 0H4v-4a1 1 0 0 1 1-1zm2 5a1.5 1.5 0 1 0 3 0 1.5 1.5 0 0 0-3 0zm8 0a1.5 1.5 0 1 0 3 0 1.5 1.5 0 0 0-3 0z"/></svg>' },
-    { id: 'van', cat: 2, label: { el: 'Βαν / 3άξονο', en: 'Van / 3-axle' }, icon: '<svg viewBox="0 0 24 24"><rect x="1" y="6" width="14" height="10" rx="1"/><path d="M15 9h4l3 4v3h-2m-13 0h8"/><circle cx="6" cy="17.5" r="1.8"/><circle cx="17" cy="17.5" r="1.8"/></svg>' },
+    { id: 'van', cat: 2, label: { el: 'Βαν', en: 'Van' }, icon: '<svg viewBox="0 0 24 24"><rect x="1" y="6" width="14" height="10" rx="1"/><path d="M15 9h4l3 4v3h-2m-13 0h8"/><circle cx="6" cy="17.5" r="1.8"/><circle cx="17" cy="17.5" r="1.8"/></svg>' },
     { id: 'truck', cat: 3, label: { el: 'Φορτηγό', en: 'Truck' }, icon: '<svg viewBox="0 0 24 24"><rect x="1" y="5" width="13" height="11" rx="1"/><path d="M14 8h4.5L22 12v4h-3m-14 0h7"/><circle cx="5.5" cy="17.5" r="1.8"/><circle cx="16.5" cy="17.5" r="1.8"/></svg>' }
 ];
 
-// Quick-pick popular land destinations (no islands — land tolls only).
-// Users can also free-text-search any location.
 const QUICK_PICKS = [
     { name: { el: 'Αθήνα', en: 'Athens' }, lat: 37.9838, lon: 23.7275 },
     { name: { el: 'Θεσσαλονίκη', en: 'Thessaloniki' }, lat: 40.6401, lon: 22.9444 },
     { name: { el: 'Πάτρα', en: 'Patras' }, lat: 38.2466, lon: 21.7346 },
+    { name: { el: 'Ιωάννινα', en: 'Ioannina' }, lat: 39.6624, lon: 20.8519 },
     { name: { el: 'Λάρισα', en: 'Larissa' }, lat: 39.6390, lon: 22.4191 },
     { name: { el: 'Βόλος', en: 'Volos' }, lat: 39.3622, lon: 22.9422 },
-    { name: { el: 'Ιωάννινα', en: 'Ioannina' }, lat: 39.6624, lon: 20.8519 },
-    { name: { el: 'Τρίκαλα', en: 'Trikala' }, lat: 39.5540, lon: 21.7678 },
     { name: { el: 'Καλαμάτα', en: 'Kalamata' }, lat: 37.0391, lon: 22.1125 },
-    { name: { el: 'Κόρινθος', en: 'Corinth' }, lat: 37.9400, lon: 22.9300 },
-    { name: { el: 'Χαλκίδα', en: 'Chalkida' }, lat: 38.4636, lon: 23.6021 },
-    { name: { el: 'Σπάρτη', en: 'Sparta' }, lat: 37.0755, lon: 22.4296 },
-    { name: { el: 'Τρίπολη', en: 'Tripoli' }, lat: 37.5100, lon: 22.3728 },
-    { name: { el: 'Πύργος', en: 'Pyrgos' }, lat: 37.6750, lon: 21.4400 },
+    { name: { el: 'Τρίκαλα', en: 'Trikala' }, lat: 39.5540, lon: 21.7678 },
     { name: { el: 'Καβάλα', en: 'Kavala' }, lat: 40.9392, lon: 24.4064 },
     { name: { el: 'Αλεξανδρούπολη', en: 'Alexandroupoli' }, lat: 40.8516, lon: 25.8772 },
-    { name: { el: 'Σέρρες', en: 'Serres' }, lat: 41.0894, lon: 23.5466 },
-    { name: { el: 'Κοζάνη', en: 'Kozani' }, lat: 40.3008, lon: 21.7884 },
-    { name: { el: 'Ηγουμενίτσα', en: 'Igoumenitsa' }, lat: 39.4667, lon: 20.2667 },
-    { name: { el: 'Άρτα', en: 'Arta' }, lat: 39.1582, lon: 20.9852 },
-    { name: { el: 'Μεσολόγγι', en: 'Mesolongi' }, lat: 38.3716, lon: 21.4265 },
-    { name: { el: 'Λαμία', en: 'Lamia' }, lat: 38.8992, lon: 22.4348 },
-    { name: { el: 'Καρδίτσα', en: 'Karditsa' }, lat: 39.3651, lon: 21.9223 },
-    { name: { el: 'Κατερίνη', en: 'Katerini' }, lat: 40.2696, lon: 22.5061 },
-    { name: { el: 'Βέροια', en: 'Veroia' }, lat: 40.5231, lon: 22.2027 },
-    { name: { el: 'Ξάνθη', en: 'Xanthi' }, lat: 41.1350, lon: 24.8882 },
-    { name: { el: 'Κομοτηνή', en: 'Komotini' }, lat: 41.1194, lon: 25.4054 },
-    { name: { el: 'Φλώρινα', en: 'Florina' }, lat: 40.7835, lon: 21.4086 },
-    { name: { el: 'Δράμα', en: 'Drama' }, lat: 41.1518, lon: 24.1477 }
+    { name: { el: 'Χαλκίδα', en: 'Chalkida' }, lat: 38.4636, lon: 23.6021 },
+    { name: { el: ' Ναύπλιο', en: 'Nafplio' }, lat: 37.5673, lon: 22.8016 }
 ];
 
 const $ = (id) => document.getElementById(id);
@@ -119,12 +125,13 @@ const fmt = (n) => n.toFixed(2) + ' €';
 const t = (key) => (I18N[LANG] && I18N[LANG][key]) || I18N.el[key] || key;
 
 async function main() {
-    FROM_POINT = QUICK_PICKS[0]; // Athens
-    TO_POINT = QUICK_PICKS[1];   // Thessaloniki
+    initMap();
+    FROM_POINT = QUICK_PICKS[0];
+    TO_POINT = QUICK_PICKS[1];
 
-    // Attach all UI wiring FIRST so the page is interactive even if data loading fails
-    setupSearch('fromInput', 'fromResults', (p) => { FROM_POINT = p; updateEndpointLabels(); });
-    setupSearch('toInput', 'toResults', (p) => { TO_POINT = p; updateEndpointLabels(); });
+    setupSearch($('fromInput'), $('fromResults'), (p) => { FROM_POINT = p; updateEndpointLabels(); });
+    setupSearch($('toInput'), $('toResults'), (p) => { TO_POINT = p; updateEndpointLabels(); });
+
     $('langBtn').addEventListener('click', () => {
         LANG = LANG === 'el' ? 'en' : 'el';
         localStorage.setItem('gtLang', LANG);
@@ -133,35 +140,93 @@ async function main() {
     });
 
     if (FERRY_MODE) $('ferryBtn').classList.add('active');
-    buildQuickPicks();
+    if (FUEL_ON) {
+        $('fuelToggleBtn').classList.add('active');
+        $('fuelBox').style.display = 'grid';
+    }
+
+    loadFuelPrefs();
     renderVehicleButtons();
     applyLang();
 
-    // Load toll data last; calculate() guards on it
     try {
         const res = await fetch('tolls.json');
         window.TOLL_DATA = await res.json();
     } catch (e) {
         console.error('tolls.json failed to load', e);
     }
+
+    // Check if URL has shared route state
+    if (restoreStateFromUrl()) {
+        calculate();
+    }
 }
 
-function buildQuickPicks() { /* removed: preset city chips */ }
+function initMap() {
+    if (typeof maplibregl === 'undefined') return;
+    map = new maplibregl.Map({
+        container: 'map',
+        style: 'https://tiles.openfreemap.org/styles/dark',
+        center: [22.4, 38.8],
+        zoom: 5.8,
+        attributionControl: false
+    });
+
+    map.on('load', () => {
+        map.addSource('route', {
+            type: 'geojson',
+            data: { type: 'FeatureCollection', features: [] }
+        });
+        map.addLayer({
+            id: 'route-glow',
+            type: 'line',
+            source: 'route',
+            paint: { 'line-color': '#ff9f43', 'line-width': 9, 'line-opacity': 0.25, 'line-blur': 4 }
+        });
+        map.addLayer({
+            id: 'route-line',
+            type: 'line',
+            source: 'route',
+            paint: { 'line-color': '#ff9f43', 'line-width': 4, 'line-opacity': 0.95 }
+        });
+    });
+}
+
+function toggleMapSize() {
+    document.body.classList.toggle('map-expanded');
+    if (map) setTimeout(() => map.resize(), 260);
+}
+
+function buildQuickPicks() {
+    const box = $('quickChips');
+    if (!box) return;
+    box.innerHTML = '';
+    QUICK_PICKS.forEach(city => {
+        const btn = document.createElement('button');
+        btn.className = 'city-chip';
+        btn.textContent = city.name[LANG];
+        btn.onclick = () => {
+            // Set destination if From is already set, otherwise set From
+            TO_POINT = city;
+            $('toInput').value = city.name[LANG];
+            updateEndpointLabels();
+        };
+        box.appendChild(btn);
+    });
+}
 
 function updateEndpointLabels() {
     const fromInput = $('fromInput'), toInput = $('toInput');
-    if (FROM_POINT && fromInput && document.activeElement !== fromInput) {
+    if (FROM_POINT && fromInput && document.activeElement !== fromInput && !fromInput.value) {
         fromInput.placeholder = '📍 ' + FROM_POINT.name[LANG];
     }
-    if (TO_POINT && toInput && document.activeElement !== toInput) {
+    if (TO_POINT && toInput && document.activeElement !== toInput && !toInput.value) {
         toInput.placeholder = '📍 ' + TO_POINT.name[LANG];
     }
 }
 
-// Free-text geocoding search via Open-Meteo
-function setupSearch(inputId, resultsId, onPick) {
-    const input = $(inputId);
-    const resultsBox = $(resultsId);
+// Komoot Photon Free Autocomplete Search (supports villages, streets, POIs in Greece)
+function setupSearch(input, resultsBox, onPick) {
     let debounceTimer = null;
 
     input.addEventListener('input', () => {
@@ -170,94 +235,117 @@ function setupSearch(inputId, resultsId, onPick) {
         if (q.length < 2) { resultsBox.innerHTML = ''; return; }
         debounceTimer = setTimeout(async () => {
             try {
-                const url = `${GEOCODE}${encodeURIComponent(q)}&count=5&language=${LANG}&format=json`;
+                const langParam = LANG === 'el' ? 'default' : 'en';
+                const url = `${PHOTON_SEARCH}?q=${encodeURIComponent(q)}&bbox=${GR_BBOX}&limit=5&lang=${langParam}`;
                 const res = await fetch(url);
                 const data = await res.json();
                 resultsBox.innerHTML = '';
-                if (!data.results || !data.results.length) return;
-                data.results.forEach(place => {
+                if (!data.features || !data.features.length) return;
+
+                data.features.forEach(feat => {
+                    const [lon, lat] = feat.geometry.coordinates;
+                    const p = feat.properties;
+                    const name = p.name || p.city || p.town || p.village || q;
+                    const sub = [p.city || p.county, p.state].filter(Boolean).join(', ');
+                    const label = sub && sub !== name ? `${name} (${sub})` : name;
+
                     const div = document.createElement('div');
                     div.className = 'geo-result';
-                    const label = [place.name, place.admin1, place.country_code]
-                        .filter(Boolean).join(', ');
                     div.textContent = label;
                     div.onclick = () => {
-                        onPick({
-                            name: { el: place.name, en: place.name },
-                            lat: place.latitude,
-                            lon: place.longitude
-                        });
-                        input.value = place.name;
+                        onPick({ name: { el: name, en: name }, lat, lon });
+                        input.value = name;
                         resultsBox.innerHTML = '';
                         updateEndpointLabels();
                     };
                     resultsBox.appendChild(div);
                 });
-            } catch (e) { console.error(e); }
-        }, 400);
+            } catch (e) { console.error('Photon search error:', e); }
+        }, 300);
     });
 
-    // Selecting all text on focus lets users overwrite the current pick instantly
-    input.addEventListener('focus', () => {
-        if (input.value) input.select();
-        updateEndpointLabels();
-    });
-    input.addEventListener('blur', () => {
-        // If cleared without picking, restore the current selection as placeholder
-        setTimeout(updateEndpointLabels, 150);
-    });
+    input.addEventListener('focus', () => { if (input.value) input.select(); });
+    input.addEventListener('blur', () => { setTimeout(updateEndpointLabels, 150); });
 
-    // dismiss results when clicking elsewhere
     document.addEventListener('click', (e) => {
         if (!resultsBox.contains(e.target) && e.target !== input) resultsBox.innerHTML = '';
     });
 }
 
+// Multi-stop Waypoints
+function addWaypoint(initialPoint = null) {
+    if (WAYPOINTS.length >= 4) return;
+    const id = 'wp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+    const wpObj = { id, point: initialPoint };
+    WAYPOINTS.push(wpObj);
+    renderWaypoints();
+}
+
+function removeWaypoint(id) {
+    WAYPOINTS = WAYPOINTS.filter(w => w.id !== id);
+    renderWaypoints();
+}
+
+function renderWaypoints() {
+    const container = $('waypointsContainer');
+    container.innerHTML = '';
+    WAYPOINTS.forEach((wp, idx) => {
+        const row = document.createElement('div');
+        row.className = 'endpoint-row';
+        row.innerHTML = `
+            <div class="endpoint-head">
+                <span class="endpoint-label">${t('stop')} ${idx + 1}</span>
+            </div>
+            <div class="search-wrap">
+                <input type="text" id="input_${wp.id}" autocomplete="off" value="${wp.point ? wp.point.name[LANG] : ''}" placeholder="...">
+                <button class="remove-stop-btn" onclick="removeWaypoint('${wp.id}')">✕</button>
+                <div class="geo-results" id="results_${wp.id}"></div>
+            </div>
+        `;
+        container.appendChild(row);
+        const inp = $(`input_${wp.id}`);
+        const res = $(`results_${wp.id}`);
+        setupSearch(inp, res, (picked) => { wp.point = picked; });
+    });
+}
+
+// Working GPS Reverse Geocoding via Komoot Photon
 async function useGpsOrigin() {
     if (!navigator.geolocation) { showError(t('err_gps')); return; }
     const btn = $('gpsBtn');
     btn.disabled = true;
     btn.textContent = '⏳ ' + t('locating');
 
-    const fail = (msgKey) => {
+    const restoreBtn = () => {
         btn.disabled = false;
-        btn.textContent = '📍 ' + t('use_gps');
-        showError(t(msgKey));
+        btn.textContent = t('use_gps');
     };
 
-    // Ask while we have a fresh user gesture (critical on Android Chrome)
-    let sawPermissionPromptFallback = false;
     navigator.geolocation.getCurrentPosition(async (pos) => {
-        btn.disabled = false;
-        btn.textContent = '📍 ' + t('use_gps');
+        restoreBtn();
+        const lat = pos.coords.latitude;
+        const lon = pos.coords.longitude;
         FROM_POINT = {
             name: { el: 'Η τοποθεσία μου', en: 'My location' },
-            lat: pos.coords.latitude,
-            lon: pos.coords.longitude
+            lat, lon
         };
-        // Resolve a readable place name and put it in the field
         try {
-            const rev = await fetch(`https://geocoding-api.open-meteo.com/v1/search?latitude=${pos.coords.latitude}&longitude=${pos.coords.longitude}&count=1&language=${LANG}&format=json`);
+            const rev = await fetch(`${PHOTON_REVERSE}?lon=${lon}&lat=${lat}`);
             const rd = await rev.json();
-            if (rd.results && rd.results.length) {
-                FROM_POINT.name = { el: rd.results[0].name, en: rd.results[0].name };
+            if (rd.features && rd.features.length) {
+                const p = rd.features[0].properties;
+                const label = p.name || p.city || p.town || p.village || p.street;
+                if (label) FROM_POINT.name = { el: label, en: label };
             }
-        } catch (e) { /* keep generic label */ }
+        } catch (e) { /* keep default GPS label */ }
         $('fromInput').value = FROM_POINT.name[LANG];
         updateEndpointLabels();
     }, (err) => {
-        console.warn('geolocation error:', err.code, err.message);
-        // 1 = permission denied, 2 = unavailable/OS location off, 3 = timeout
-        if (err.code === 1) fail('err_gps');
-        else if (err.code === 2) fail('err_gps_off');
-        else if (!sawPermissionPromptFallback) fail('err_gps_timeout');
-        else fail('err_gps');
-    }, {
-        enableHighAccuracy: true,
-        timeout: 15000,
-        maximumAge: 0   // force a fresh fix so Android shows the prompt
-    });
-    sawPermissionPromptFallback = true;
+        restoreBtn();
+        if (err.code === 1) showError(t('err_gps'));
+        else if (err.code === 2) showError(t('err_gps_off'));
+        else showError(t('err_gps_timeout'));
+    }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 });
 }
 
 function renderVehicleButtons() {
@@ -270,10 +358,24 @@ function renderVehicleButtons() {
         b.onclick = () => {
             VEHICLE = v.id;
             localStorage.setItem('gtVehicle', VEHICLE);
+            loadFuelPrefs();
             renderVehicleButtons();
+            if (LAST_RESULT) calculate();
         };
         grid.appendChild(b);
     });
+}
+
+function loadFuelPrefs() {
+    const savedCons = localStorage.getItem(`gtCons_${VEHICLE}`);
+    const savedPrice = localStorage.getItem('gtFuelPrice');
+    $('consumptionInput').value = savedCons || DEFAULT_CONSUMPTION[VEHICLE] || 6.5;
+    if (savedPrice) $('priceInput').value = savedPrice;
+}
+
+function saveFuelPrefs() {
+    localStorage.setItem(`gtCons_${VEHICLE}`, $('consumptionInput').value);
+    localStorage.setItem('gtFuelPrice', $('priceInput').value);
 }
 
 function applyLang() {
@@ -282,95 +384,143 @@ function applyLang() {
         el.textContent = t(el.getAttribute('data-i18n'));
     });
     $('langBtn').textContent = LANG === 'el' ? 'EN' : 'EL';
-    document.title = LANG === 'el'
-        ? 'GreekTolls — Υπολογισμός Διοδίων Ελλάδας'
-        : 'GreekTolls — Greece Toll Calculator';
-    // re-translate quick chips
     buildQuickPicks();
+    renderWaypoints();
     updateEndpointLabels();
 }
 
+// Fixed swapCities: swaps both memory references and input text values
 function swapCities() {
-    const tmp = FROM_POINT;
-    FROM_POINT = TO_POINT;
-    TO_POINT = tmp;
+    [FROM_POINT, TO_POINT] = [TO_POINT, FROM_POINT];
+    const fromInput = $('fromInput'), toInput =$('toInput');
+    [fromInput.value, toInput.value] = [toInput.value, fromInput.value];
+    WAYPOINTS.reverse();
+    renderWaypoints();
     updateEndpointLabels();
+    if (LAST_RESULT) calculate();
 }
 
 function toggleRoundTrip() {
     ROUND_TRIP = !ROUND_TRIP;
     $('roundTripBtn').classList.toggle('active', ROUND_TRIP);
+    if (LAST_RESULT) calculate();
 }
 
 function toggleFerry() {
     FERRY_MODE = !FERRY_MODE;
     localStorage.setItem('gtFerry', FERRY_MODE ? '1' : '0');
     $('ferryBtn').classList.toggle('active', FERRY_MODE);
+    if (LAST_RESULT) calculate();
 }
 
 function toggleFuel() {
     FUEL_ON = !FUEL_ON;
-    $('fuelToggleBtn').classList.toggle('active', FUEL_ON);
-    $('fuelBox').style.display = FUEL_ON ? 'block' : 'none';
+    localStorage.setItem('gtFuelOn', FUEL_ON ? '1' : '0');
+    $('fuelToggleBtn').classList.toggle('active', FUEL_ON);$('fuelBox').style.display = FUEL_ON ? 'grid' : 'none';
+    if (LAST_RESULT) calculate();
+}
+
+function changePassengers(delta) {
+    PASSENGERS = Math.max(1, Math.min(9, PASSENGERS + delta));
+    $('paxCount').textContent = `${PASSENGERS} 👤`;
+    updatePerPersonDisplay();
+}
+
+function updatePerPersonDisplay() {
+    if (!LAST_RESULT) return;
+    const grandTotal = LAST_RESULT.total + (LAST_RESULT.fuelCost || 0);
+    $('perPersonAmount').textContent = fmt(grandTotal / PASSENGERS);
 }
 
 function showError(msg) {
     const box = $('errBox');
     box.textContent = msg;
     box.style.display = 'block';
-    setTimeout(() => { box.style.display = 'none'; }, 6000);
+    setTimeout(() => { box.style.display = 'none'; }, 5000);
 }
 
-// Fetch with retries and exponential backoff for flaky public routers
-async function fetchRouteWithRetry(url) {
-    let lastErr = null;
-    for (let attempt = 0; attempt <= OSRM_RETRIES; attempt++) {
+// Race FOSSGIS OSRM and Project OSRM for fast, resilient routing
+async function fetchRouteOSRM(points) {
+    const coordString = points.map(p => `${p.lon},${p.lat}`).join(';');
+    const query = `${coordString}?overview=full&alternatives=false&steps=false`;
+
+    for (const base of OSRM_SERVERS) {
         try {
-            const res = await fetch(url);
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 4500);
+            const res = await fetch(base + query, { signal: ctrl.signal });
+            clearTimeout(timer);
             const data = await res.json();
             if (data.code === 'Ok' && data.routes && data.routes.length) return data;
-            // "NoRoute" is a definitive answer — don't retry
             if (data.code === 'NoRoute') throw Object.assign(new Error(t('err_route')), { definitive: true });
-            lastErr = new Error(data.code || 'route error');
         } catch (e) {
             if (e.definitive) throw e;
-            lastErr = e;
-        }
-        if (attempt < OSRM_RETRIES) {
-            await new Promise(r => setTimeout(r, 800 * Math.pow(2, attempt)));
         }
     }
-    throw lastErr || new Error('routing failed');
+    throw new Error('All routing servers failed');
+}
+
+// Fetch Toll-Free Alternative via Valhalla OSM in parallel
+async function fetchTollFreeValhalla(points) {
+    try {
+        const body = {
+            locations: points.map(p => ({ lat: p.lat, lon: p.lon })),
+            costing: VEHICLE === 'moto' ? 'motorcycle' : (VEHICLE === 'truck' ? 'truck' : 'auto'),
+            costing_options: {
+                auto: { use_tolls: 0 },
+                motorcycle: { use_tolls: 0 },
+                truck: { use_tolls: 0 }
+            },
+            units: 'kilometers'
+        };
+        const res = await fetch(VALHALLA_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        if (!data.trip || !data.trip.summary) return null;
+        return {
+            distKm: data.trip.summary.length,
+            durMin: Math.round(data.trip.summary.time / 60)
+        };
+    } catch (e) {
+        return null;
+    }
 }
 
 async function calculate() {
     if (!window.TOLL_DATA) { showError(t('err_service')); return; }
     if (!FROM_POINT || !TO_POINT) { showError(t('err_no_location')); return; }
-    if (FROM_POINT === TO_POINT ||
-        (FROM_POINT.lat === TO_POINT.lat && FROM_POINT.lon === TO_POINT.lon)) {
+    if (Math.abs(FROM_POINT.lat - TO_POINT.lat) < 0.0005 && Math.abs(FROM_POINT.lon - TO_POINT.lon) < 0.0005) {
         showError(t('err_same')); return;
     }
+
+    const activeWaypoints = WAYPOINTS.map(w => w.point).filter(Boolean);
+    const allPoints = [FROM_POINT, ...activeWaypoints, TO_POINT];
 
     const btn = $('calcBtn');
     btn.disabled = true;
     $('loader').style.display = 'block';
-    $('results').style.display = 'none';
 
     try {
-        const url = `${OSRM}${FROM_POINT.lon},${FROM_POINT.lat};${TO_POINT.lon},${TO_POINT.lat}?overview=full&alternatives=false&steps=false`;
-        const data = await fetchRouteWithRetry(url);
+        const [osrmData, tollFreeSummary] = await Promise.all([
+            fetchRouteOSRM(allPoints),
+            fetchTollFreeValhalla(allPoints)
+        ]);
 
-        const route = data.routes[0];
+        const route = osrmData.routes[0];
         const distKm = route.distance / 1000;
         const durMin = Math.round(route.duration / 60);
         const pts = decodePolyline(route.geometry);
 
         const veh = VEHICLES.find(v => v.id === VEHICLE);
-        let matched = matchTolls(pts, veh.cat);
+        let matched = matchTollsPrecise(pts, veh.cat);
 
-        // Ferry alternative for Rio-Antirrio: swap bridge toll for indicative ferry fare
+        // Ferry swap for Rio-Antirrio Bridge
         if (FERRY_MODE) {
-            const FERRY_PRICES = [5.50, 13.50, 21.00, 30.00]; // moto, car, van, truck
+            const FERRY_PRICES = [2.00, 7.00, 13.00, 26.00];
             matched = matched.map(m => {
                 if (m.station.op === 'Gefyra') {
                     return { ...m, price: FERRY_PRICES[veh.cat], viaFerry: true };
@@ -389,52 +539,142 @@ async function calculate() {
             fuelCost = (distKm / 100) * cons * price * (ROUND_TRIP ? 2 : 1);
         }
 
-        renderResult({ from: FROM_POINT, to: TO_POINT, distKm, durMin, matched, oneWay, total, fuelCost });
-        LAST_RESULT = { from: FROM_POINT, to: TO_POINT, distKm, durMin, matched, total, fuelCost };
+        LAST_RESULT = { points: allPoints, distKm, durMin, matched, total, fuelCost, tollFreeSummary };
+        renderResult(LAST_RESULT);
+        drawRouteOnMap(pts, matched, allPoints);
+        syncStateToUrl();
     } catch (e) {
         console.error(e);
-        showError(e.message && e.message !== 'Error' && e.definitive ? t('err_route') : t('err_service'));
+        showError(e.definitive ? t('err_route') : t('err_service'));
     } finally {
         btn.disabled = false;
         $('loader').style.display = 'none';
     }
 }
 
-// Find tolls within ~2.5km of any route point (sampled)
-function matchTolls(routePts, vehicleCat) {
+// High-precision segment matcher: distinguishes frontal booths from lateral exit ramps
+function matchTollsPrecise(routePts, vehicleCat) {
     const matched = [];
-    const seen = new Map(); // id -> earliest route index
-    for (let i = 0; i < routePts.length; i += 3) {
-        const [lon, lat] = routePts[i];
-        window.TOLL_DATA.stations.forEach(st => {
-            if (seen.has(st.id)) return;
-            const d = haversine(lat, lon, st.lat, st.lon);
-            // Open-system tolls (Attiki Odos) charge by entry/exit, no single gate —
-            // use a wider net so routes through Athens still include them
-            const radius = st.op === 'Attiki Odos' ? 6 : 2.5;
-            if (d < radius) {
-                seen.set(st.id, i);
+    const seen = new Set();
+    let attikiBilled = false;
+
+    for (let i = 0; i < routePts.length - 1; i++) {
+        const [lon1, lat1] = routePts[i];
+        const [lon2, lat2] = routePts[i + 1];
+
+        for (const st of window.TOLL_DATA.stations) {
+            if (seen.has(st.id)) continue;
+
+            // Fast bounding-box pre-filter (~1.6 km) before running trigonometry
+            if (Math.abs(lat1 - st.lat) > 0.015 || Math.abs(lon1 - st.lon) > 0.015) continue;
+
+            const d = pointToSegmentKm(st.lat, st.lon, lat1, lon1, lat2, lon2);
+            // Frontal plazas must be within 350m of the highway centerline; side ramps within 180m
+            const maxRadius = st.op === 'Attiki Odos' ? 0.90 : (st.type === 'main' || st.type === 'special' ? 0.35 : 0.18);
+
+            if (d <= maxRadius) {
+                if (st.op === 'Attiki Odos') {
+                    if (attikiBilled) continue;
+                    attikiBilled = true;
+                }
+                seen.add(st.id);
                 matched.push({ station: st, price: st.prices[vehicleCat], routeIdx: i });
             }
-        });
+        }
     }
-    // Order stations as they appear along the driven route
-    matched.sort((a, b) => a.routeIdx - b.routeIdx);
-    return matched;
+
+    // Filter out lateral ('side') booths if the driver stayed on the motorway and crossed a frontal ('main') booth nearby
+    const mainHits = matched.filter(m => m.station.type === 'main');
+    return matched.filter(m => {
+        if (m.station.type !== 'side') return true;
+        const nearbyMainOnSameRoad = mainHits.some(mainHit =>
+            mainHit.station.road === m.station.road &&
+            haversine(mainHit.station.lat, mainHit.station.lon, m.station.lat, m.station.lon) < 12
+        );
+        return !nearbyMainOnSameRoad;
+    }).sort((a, b) => a.routeIdx - b.routeIdx);
 }
 
-function renderResult({ from, to, distKm, durMin, matched, total, fuelCost }) {
+function pointToSegmentKm(px, py, x1, y1, x2, y2) {
+    const dx = x2 - x1, dy = y2 - y1;
+    if (dx === 0 && dy === 0) return haversine(px, py, x1, y1);
+    const tParam = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy)));
+    return haversine(px, py, x1 + tParam * dx, y1 + tParam * dy);
+}
+
+function drawRouteOnMap(pts, matched, allPoints) {
+    if (!map || !map.getSource('route')) return;
+
+    map.getSource('route').setData({
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: pts }
+    });
+
+    // Clear previous markers
+    mapMarkers.forEach(m => m.remove());
+    mapMarkers = [];
+
+    // Add toll markers
+    matched.forEach(m => {
+        const el = document.createElement('div');
+        el.className = 'toll-marker' + (m.station.type === 'side' ? ' side-booth' : '');
+        el.textContent = `${m.station.name[LANG]} · ${fmt(m.price)}`;
+        el.onclick = () => focusStation(m.station.lat, m.station.lon);
+
+        const marker = new maplibregl.Marker({ element: el })
+            .setLngLat([m.station.lon, m.station.lat])
+            .addTo(map);
+        mapMarkers.push(marker);
+    });
+
+    // Fit map bounds to route
+    const bounds = new maplibregl.LngLatBounds();
+    pts.forEach(coord => bounds.extend(coord));
+    map.fitBounds(bounds, { padding: { top: 60, bottom: 260, left: 40, right: 40 }, maxZoom: 12 });
+}
+
+function focusStation(lat, lon) {
+    if (!map) return;
+    document.body.classList.add('map-expanded');
+    setTimeout(() => {
+        map.resize();
+        map.flyTo({ center: [lon, lat], zoom: 13.5, essential: true });
+    }, 200);
+}
+
+function renderResult({ points, distKm, durMin, matched, total, fuelCost, tollFreeSummary }) {
     $('totalAmount').textContent = fmt(total);
-    const hrs = Math.floor(durMin / 60);
-    const mins = durMin % 60;
+    const mult = ROUND_TRIP ? 2 : 1;
+    const totalDist = Math.round(distKm * mult);
+    const totalDur = durMin * mult;
+    const hrs = Math.floor(totalDur / 60);
+    const mins = totalDur % 60;
+
+    const namesChain = points.map(p => `<b>${p.name[LANG]}</b>`).join(' → ');
     $('routeMeta').innerHTML =
-        `<b>${from.name[LANG]}</b> → <b>${to.name[LANG]}</b><br>` +
-        `${Math.round(distKm)} km · ${hrs}h ${mins}m` +
+        `${namesChain}<br>${totalDist} km · ${hrs}h ${mins}m` +
         (ROUND_TRIP ? ` <span style="color:var(--accent)">${t('roundtrip_note')}</span>` : '');
+
+    // Toll-free comparison banner
+    const altBanner = $('altBanner');
+    if (tollFreeSummary && total > 0) {
+        const diffMin = Math.max(0, (tollFreeSummary.durMin - durMin) * mult);
+        const diffKm = Math.round((tollFreeSummary.distKm - distKm) * mult);
+        const signKm = diffKm >= 0 ? `+${diffKm}` : `${diffKm}`;
+        altBanner.style.display = 'flex';
+        altBanner.innerHTML = `
+            <span>🛣️ <b>${t('alt_free_prefix')}</b> +${diffMin} min (${signKm} km)</span>
+            <b>${t('alt_saves')} ${fmt(total)}</b>
+        `;
+    } else {
+        altBanner.style.display = 'none';
+    }
+
+    updatePerPersonDisplay();
 
     const stats = [
         { v: fmt(total), k: t('tolls') },
-        { v: Math.round(ROUND_TRIP ? distKm * 2 : distKm) + ' km', k: t('distance') },
+        { v: totalDist + ' km', k: t('distance') },
         { v: matched.length + (ROUND_TRIP ? ' ×2' : ''), k: t('stations_count') }
     ];
     if (fuelCost !== null) {
@@ -445,43 +685,90 @@ function renderResult({ from, to, distKm, durMin, matched, total, fuelCost }) {
         `<div class="sub-stat"><div class="v">${s.v}</div><div class="k">${s.k}</div></div>`
     ).join('');
 
+    const badgeLabel = (type) => type === 'main' ? t('type_main') : (type === 'side' ? t('type_side') : t('type_special'));
+
     $('stationList').innerHTML = matched.map(m =>
-        `<li class="station-item">
-            <span class="station-name">${m.station.name[LANG]}
-                <span class="station-road">${m.station.road} · ${m.station.op}</span></span>
+        `<li class="station-item" onclick="focusStation(${m.station.lat}, ${m.station.lon})">
+            <span class="station-name">
+                ${m.station.name[LANG]}
+                <span class="station-badge">${badgeLabel(m.station.type)}</span>
+                <span class="station-road">${m.station.road} · ${m.station.op}</span>
+            </span>
             <span class="station-price">${m.viaFerry ? '⛴️ ' : ''}${fmt(m.price)}</span>
         </li>`
     ).join('') || `<li class="station-item" style="color:var(--text-dim)">${t('no_stations')}</li>`;
 
-    // Report link: prefilled mailto
-    const subject = encodeURIComponent('GreekTolls: Λάθος τιμή διοδίων');
+    // Deep-link into Google Maps with all stops
+    const originParam = `${points[0].lat},${points[0].lon}`;
+    const destParam = `${points[points.length - 1].lat},${points[points.length - 1].lon}`;
+    const wpParam = points.length > 2
+        ? '&waypoints=' + points.slice(1, -1).map(p => `${p.lat},${p.lon}`).join('|')
+        : '';
+    $('gmapsLink').href = `https://www.google.com/maps/dir/?api=1&origin=${originParam}&destination=${destParam}${wpParam}&travelmode=driving`;
+
+    // Prefilled mailto report link
+    const subject = encodeURIComponent('GreekTolls: Αναφορά τιμής διοδίων');
     const body = encodeURIComponent(
-        `Διαδρομή: ${from.name.el} → ${to.name.el}\n` +
+        `Διαδρομή: ${points.map(p => p.name.el).join(' -> ')}\n` +
         `Όχημα: ${VEHICLE}\n` +
         `Υπολογισμένο σύνολο: ${total.toFixed(2)} €\n\n` +
-        `Σταθμοί:\n` + matched.map(m => `- ${m.station.name.el} (${m.station.road}): ${m.price.toFixed(2)} €`).join('\n') +
-        `\n\nΣχόλιο/σωστή τιμή: `
+        `Σταθμοί:\n` + matched.map(m => `- ${m.station.name.el} (${m.station.road}): ${m.price.toFixed(2)} €`).join('\n')
     );
     $('reportLink').href = `mailto:theursoalbo@gmail.com?subject=${subject}&body=${body}`;
 
     $('results').style.display = 'block';
 }
 
+// URL State Sync & Sharing
+function syncStateToUrl() {
+    if (!FROM_POINT || !TO_POINT) return;
+    const params = new URLSearchParams();
+    params.set('from', `${FROM_POINT.lat.toFixed(4)},${FROM_POINT.lon.toFixed(4)},${FROM_POINT.name[LANG]}`);
+    params.set('to', `${TO_POINT.lat.toFixed(4)},${TO_POINT.lon.toFixed(4)},${TO_POINT.name[LANG]}`);
+    params.set('v', VEHICLE);
+    if (ROUND_TRIP) params.set('rt', '1');
+    history.replaceState(null, '', '?' + params.toString());
+}
+
+function restoreStateFromUrl() {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has('from') || !params.has('to')) return false;
+    try {
+        const parsePt = (str) => {
+            const [lat, lon, ...nameParts] = str.split(',');
+            const nm = nameParts.join(',') || 'Point';
+            return { lat: parseFloat(lat), lon: parseFloat(lon), name: { el: nm, en: nm } };
+        };
+        FROM_POINT = parsePt(params.get('from'));
+        TO_POINT = parsePt(params.get('to'));
+        $('fromInput').value = FROM_POINT.name[LANG];$('toInput').value = TO_POINT.name[LANG];
+        if (params.has('v')) VEHICLE = params.get('v');
+        if (params.get('rt') === '1') {
+            ROUND_TRIP = true;
+            $('roundTripBtn').classList.add('active');
+        }
+        renderVehicleButtons();
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
 async function shareResult() {
     if (!LAST_RESULT) return;
     const r = LAST_RESULT;
-    const text = LANG === 'el'
-        ? `${r.from.name.el} → ${r.to.name.el}: Διόδια ${fmt(r.total)}, ${Math.round(r.distKm)} km${ROUND_TRIP ? ' (μετ\' επιστροφής)' : ''} — GreekTolls`
-        : `${r.from.name.en} → ${r.to.name.en}: Tolls ${fmt(r.total)}, ${Math.round(r.distKm)} km${ROUND_TRIP ? ' (round trip)' : ''} — GreekTolls`;
+    const names = r.points.map(p => p.name[LANG]).join(' → ');
+    const text = `${names}: ${fmt(r.total)} (${Math.round(r.distKm * (ROUND_TRIP ? 2 : 1))} km) — GreekTolls`;
+    const shareUrl = window.location.href;
+
     if (navigator.share) {
-        try { await navigator.share({ text }); } catch (e) { /* cancelled */ }
+        try { await navigator.share({ title: 'GreekTolls', text, url: shareUrl }); } catch (e) {}
     } else {
-        navigator.clipboard.writeText(text);
+        await navigator.clipboard.writeText(`${text}\n${shareUrl}`);
         alert(t('copied'));
     }
 }
 
-// OSRM polyline decoder (precision 5)
 function decodePolyline(str) {
     let index = 0, lat = 0, lng = 0;
     const coords = [];
