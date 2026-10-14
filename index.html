@@ -3,18 +3,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>GreekTolls — Υπολογισμός Διοδίων Ελλάδας</title>
-    <meta name="description" content="Υπολόγισε τα διόδια για το ταξίδι σου στην Ελλάδα: μοτοσυκλέτα, αυτοκίνητο, φορτηγό. Δωρεάν, χωρίς εγγραφή.">
+    <title>GreekTolls — Υπολογισμός Διοδίων & Road Trip Ελλάδας</title>
+    <meta name="description" content="Υπολόγισε τα διόδια και τα καύσιμα για το ταξίδι σου στην Ελλάδα: μοτοσυκλέτα, αυτοκίνητο, βαν, φορτηγό. Δωρεάν, με χάρτη και στάσεις.">
     <link rel="manifest" href="manifest.json">
+    <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
     <style>
         :root {
-            --bg-color: #101216;
-            --card-bg: rgba(32, 36, 42, 0.75);
-            --text-main: #ffffff;
-            --text-dim: #a8adb5;
+            --bg-color: #0d0f12;
+            --card-bg: rgba(22, 25, 30, 0.88);
+            --card-solid: #16191e;
+            --text-main: #f3f4f6;
+            --text-dim: #9ca3af;
             --accent-gradient: linear-gradient(135deg, #ff9f43, #ff5252);
             --accent: #ff9f43;
-            --border-color: rgba(255,255,255,0.09);
+            --accent-green: #10b981;
+            --border-color: rgba(255, 255, 255, 0.1);
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -22,287 +25,561 @@
             background: var(--bg-color);
             color: var(--text-main);
             min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            padding: 20px 15px calc(30px + env(safe-area-inset-bottom));
+            overflow-x: hidden;
             -webkit-tap-highlight-color: transparent;
         }
-        h1 { font-size: 1.9rem; font-weight: 900; font-style: italic; letter-spacing: 2px; margin-bottom: 4px; }
-        .tagline { color: var(--text-dim); font-size: 0.95rem; margin-bottom: 25px; text-align: center; }
+
+        /* Fullscreen Interactive Map */
+        #map {
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+            background: #0d0f12;
+        }
+
+        /* Floating App Shell (Sidebar on Desktop, Bottom Sheet on Mobile) */
+        .app-shell {
+            position: relative;
+            z-index: 10;
+            width: 100%;
+            max-width: 500px;
+            margin: 0 auto;
+            padding: 12px 12px calc(30px + env(safe-area-inset-bottom));
+            pointer-events: none;
+        }
+        @media (min-width: 900px) {
+            .app-shell {
+                margin: 0;
+                padding: 20px;
+                max-width: 460px;
+            }
+        }
+        .interactive-panel {
+            pointer-events: auto;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            background: var(--card-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            padding: 10px 16px;
+            border-radius: 16px;
+            border: 1px solid var(--border-color);
+        }
+        .brand-wrap h1 {
+            font-size: 1.35rem;
+            font-weight: 900;
+            font-style: italic;
+            letter-spacing: 1px;
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .tagline { color: var(--text-dim); font-size: 0.78rem; }
+
+        .header-actions { display: flex; gap: 8px; align-items: center; }
+        .pill-btn {
+            background: rgba(255,255,255,0.06);
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+            font-weight: 700;
+            font-size: 0.78rem;
+            padding: 6px 12px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .pill-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+        /* Map Spacer on Mobile so user sees map at top */
+        .map-peek {
+            height: 22vh;
+            pointer-events: none;
+            transition: height 0.25s ease;
+        }
+        body.map-expanded .map-peek { height: 62vh; }
+        @media (min-width: 900px) {
+            .map-peek { display: none; }
+        }
 
         .card {
-            width: 100%; max-width: 600px;
             background: var(--card-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
             border-radius: 18px;
             border: 1px solid var(--border-color);
-            padding: 22px;
-            margin-bottom: 15px;
+            padding: 18px;
+            margin-bottom: 12px;
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
         }
-        label { display: block; font-size: 0.85rem; color: var(--text-dim); margin-bottom: 6px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; }
+        label {
+            display: block;
+            font-size: 0.78rem;
+            color: var(--text-dim);
+            margin-bottom: 6px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
 
-        .endpoint-row { position: relative; margin-bottom: 14px; }
-        .endpoint-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
-        .endpoint-label { font-size: 0.85rem; color: var(--text-dim); font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase; }
-        .endpoint-value { font-size: 0.92rem; color: var(--accent); font-weight: 700; max-width: 60%; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .endpoint-row { position: relative; margin-bottom: 10px; }
+        .endpoint-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; }
+        .endpoint-label { font-size: 0.78rem; color: var(--text-dim); font-weight: 700; text-transform: uppercase; }
 
-        .search-wrap { position: relative; }
+        .search-wrap { position: relative; display: flex; gap: 6px; align-items: center; }
         input[type="text"], input[type="number"] {
             width: 100%;
-            padding: 12px 14px;
-            font-size: 1rem;
-            border-radius: 12px;
-            border: none;
-            background: rgba(0,0,0,0.35);
+            padding: 11px 13px;
+            font-size: 0.95rem;
+            border-radius: 11px;
+            border: 1px solid rgba(255,255,255,0.08);
+            background: rgba(0, 0, 0, 0.45);
             color: var(--text-main);
             font-family: inherit;
         }
-        input:focus { outline: 1px solid var(--accent); }
+        input:focus { outline: none; border-color: var(--accent); }
+
         .geo-results {
             position: absolute;
             top: calc(100% + 4px); left: 0; right: 0;
-            z-index: 50;
-            background: #1c2027;
+            z-index: 100;
+            background: var(--card-solid);
             border: 1px solid var(--border-color);
             border-radius: 12px;
             overflow: hidden;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            box-shadow: 0 12px 30px rgba(0,0,0,0.7);
         }
-        .geo-result { padding: 11px 14px; cursor: pointer; font-size: 0.95rem; border-bottom: 1px solid var(--border-color); }
+        .geo-result {
+            padding: 10px 13px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            border-bottom: 1px solid var(--border-color);
+        }
         .geo-result:last-child { border-bottom: none; }
-        .geo-result:hover { background: rgba(255,159,67,0.1); color: var(--accent); }
+        .geo-result:hover { background: rgba(255,159,67,0.12); color: var(--accent); }
 
         .gps-btn {
-            padding: 5px 12px;
+            padding: 4px 10px;
             border-radius: 20px;
-            border: 1px solid rgba(0,213,255,0.35);
-            background: transparent;
+            border: 1px solid rgba(0,213,255,0.4);
+            background: rgba(0,213,255,0.08);
             color: #00d5ff;
-            font-size: 0.8rem;
+            font-size: 0.75rem;
             font-weight: 700;
             cursor: pointer;
             font-family: inherit;
-            white-space: nowrap;
         }
 
-        .row-swap { display: flex; justify-content: center; margin: -4px 0 14px; }
+        /* Waypoints & Swap Controls */
+        .route-controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 6px 0 10px;
+        }
+        .add-stop-btn {
+            background: rgba(255,255,255,0.06);
+            border: 1px dashed rgba(255,255,255,0.22);
+            color: var(--text-main);
+            padding: 6px 12px;
+            border-radius: 10px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .add-stop-btn:hover { border-color: var(--accent); color: var(--accent); }
         .swap-btn {
-            background: rgba(255,159,67,0.12); border: 1px solid rgba(255,159,67,0.3);
-            color: var(--accent); font-size: 1.15rem;
-            width: 40px; height: 40px; border-radius: 50%;
-            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            background: rgba(255,159,67,0.12);
+            border: 1px solid rgba(255,159,67,0.35);
+            color: var(--accent);
+            font-size: 1rem;
+            width: 34px; height: 34px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
             transition: transform 0.25s;
         }
         .swap-btn:hover { transform: rotate(180deg); }
-
-        .veh-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 8px; margin-bottom: 14px; }
-        .veh-btn {
-            padding: 10px 6px;
-            border-radius: 12px;
-            border: 1px solid var(--border-color);
-            background: rgba(0,0,0,0.3);
-            color: var(--text-dim);
+        .remove-stop-btn {
+            background: rgba(255,82,82,0.15);
+            border: 1px solid rgba(255,82,82,0.35);
+            color: #ff6b6b;
+            border-radius: 10px;
+            width: 38px; height: 38px;
             cursor: pointer;
-            font-size: 0.82rem;
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+
+        /* Quick City Chips */
+        .quick-chips {
+            display: flex;
+            gap: 6px;
+            overflow-x: auto;
+            padding-bottom: 6px;
+            margin-bottom: 12px;
+            scrollbar-width: none;
+        }
+        .quick-chips::-webkit-scrollbar { display: none; }
+        .city-chip {
+            padding: 5px 10px;
+            border-radius: 16px;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid var(--border-color);
+            color: var(--text-dim);
+            font-size: 0.76rem;
             font-weight: 600;
-            display: flex; flex-direction: column; align-items: center; gap: 5px;
-            transition: all 0.15s;
+            white-space: nowrap;
+            cursor: pointer;
             font-family: inherit;
         }
-        .veh-btn svg { width: 24px; height: 24px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+        .city-chip:hover { border-color: var(--accent); color: var(--text-main); }
+
+        /* Vehicle Grid */
+        .veh-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; margin-bottom: 12px; }
+        .veh-btn {
+            padding: 9px 4px;
+            border-radius: 11px;
+            border: 1px solid var(--border-color);
+            background: rgba(0,0,0,0.35);
+            color: var(--text-dim);
+            cursor: pointer;
+            font-size: 0.76rem;
+            font-weight: 600;
+            display: flex; flex-direction: column; align-items: center; gap: 4px;
+            font-family: inherit;
+        }
+        .veh-btn svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
         .veh-btn.active {
             border-color: var(--accent);
             color: var(--accent);
-            background: rgba(255,159,67,0.08);
+            background: rgba(255,159,67,0.1);
         }
 
-        .toggles { display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
+        /* Option Toggles */
+        .toggles { display: flex; gap: 7px; margin-bottom: 14px; flex-wrap: wrap; }
         .toggle-chip {
-            padding: 9px 16px;
+            padding: 7px 12px;
             border-radius: 50px;
             border: 1px solid var(--border-color);
-            background: rgba(0,0,0,0.3);
+            background: rgba(0,0,0,0.35);
             color: var(--text-dim);
             cursor: pointer;
-            font-size: 0.88rem;
+            font-size: 0.8rem;
             font-weight: 600;
             font-family: inherit;
-            transition: all 0.15s;
-            display: flex; align-items: center; gap: 7px;
+            display: flex; align-items: center; gap: 5px;
         }
         .toggle-chip.active {
             border-color: var(--accent);
             color: var(--accent);
-            background: rgba(255,159,67,0.08);
+            background: rgba(255,159,67,0.1);
+        }
+
+        .fuel-grid {
+            display: none;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 14px;
+            padding: 12px;
+            background: rgba(0,0,0,0.25);
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
         }
 
         .go-btn {
             width: 100%;
-            padding: 15px;
-            border-radius: 14px;
+            padding: 13px;
+            border-radius: 12px;
             border: none;
             background: var(--accent-gradient);
             color: #101216;
-            font-size: 1.05rem;
+            font-size: 0.98rem;
             font-weight: 800;
-            letter-spacing: 1px;
+            letter-spacing: 0.8px;
             cursor: pointer;
             text-transform: uppercase;
             font-family: inherit;
-            box-shadow: 0 4px 18px rgba(255,159,67,0.3);
-            transition: transform 0.15s;
+            box-shadow: 0 4px 16px rgba(255,159,67,0.3);
         }
-        .go-btn:active { transform: scale(0.98); }
-        .go-btn:disabled { opacity: 0.55; }
+        .go-btn:disabled { opacity: 0.55; cursor: wait; }
 
-        .loader { display: none; margin: 30px auto; width: 38px; height: 38px;
-            border: 4px solid rgba(255,255,255,0.1); border-top-color: var(--accent);
-            border-radius: 50%; animation: spin 1s linear infinite; }
+        .loader {
+            display: none; margin: 20px auto; width: 34px; height: 34px;
+            border: 3px solid rgba(255,255,255,0.1); border-top-color: var(--accent);
+            border-radius: 50%; animation: spin 0.8s linear infinite;
+        }
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        /* Results */
-        .results { display: none; width: 100%; max-width: 600px; animation: fadeIn 0.35s ease; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+        /* Results Section */
+        .results { display: none; animation: fadeIn 0.25s ease; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
         .total-card {
             background: var(--card-bg);
+            backdrop-filter: blur(16px);
             border-radius: 18px;
-            border: 1px solid rgba(255,159,67,0.35);
-            padding: 26px 22px;
+            border: 1px solid rgba(255,159,67,0.4);
+            padding: 20px 18px;
             text-align: center;
-            margin-bottom: 14px;
+            margin-bottom: 12px;
         }
-        .total-label { color: var(--text-dim); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 6px; }
-        .total-amount { font-size: 3rem; font-weight: 800; background: var(--accent-gradient); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; font-variant-numeric: tabular-nums; }
-        .route-meta { color: var(--text-dim); margin-top: 10px; font-size: 0.95rem; font-variant-numeric: tabular-nums; }
+        .total-label { color: var(--text-dim); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1.5px; }
+        .total-amount {
+            font-size: 2.7rem;
+            font-weight: 900;
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-variant-numeric: tabular-nums;
+            margin: 4px 0;
+        }
+        .route-meta { color: var(--text-dim); font-size: 0.88rem; line-height: 1.4; }
         .route-meta b { color: var(--text-main); }
 
-        .sub-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 14px; }
-        .sub-stat {
-            background: var(--card-bg); border-radius: 14px; border: 1px solid var(--border-color);
-            padding: 14px; text-align: center;
+        /* Avoid Tolls Comparison Banner */
+        .alt-banner {
+            display: none;
+            margin-top: 12px;
+            padding: 9px 12px;
+            border-radius: 10px;
+            background: rgba(16, 185, 129, 0.12);
+            border: 1px solid rgba(16, 185, 129, 0.35);
+            color: #6ee7b7;
+            font-size: 0.82rem;
+            text-align: left;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
         }
-        .sub-stat .v { font-size: 1.3rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-        .sub-stat .k { font-size: 0.78rem; color: var(--text-dim); margin-top: 2px; }
 
-        .station-list { list-style: none; }
+        /* Passenger Cost Split Bar */
+        .split-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border-color);
+            font-size: 0.85rem;
+        }
+        .split-controls { display: flex; align-items: center; gap: 6px; }
+        .split-step {
+            width: 28px; height: 28px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            background: rgba(255,255,255,0.06);
+            color: var(--text-main);
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .per-person-val { font-weight: 800; color: var(--accent); font-variant-numeric: tabular-nums; }
+
+        .sub-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(105px, 1fr)); gap: 8px; margin-bottom: 12px; }
+        .sub-stat {
+            background: var(--card-bg);
+            backdrop-filter: blur(16px);
+            border-radius: 14px;
+            border: 1px solid var(--border-color);
+            padding: 12px 8px;
+            text-align: center;
+        }
+        .sub-stat .v { font-size: 1.15rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+        .sub-stat .k { font-size: 0.72rem; color: var(--text-dim); margin-top: 2px; }
+
+        .station-list { list-style: none; max-height: 280px; overflow-y: auto; }
         .station-item {
             display: flex; justify-content: space-between; align-items: center;
-            padding: 11px 4px;
+            padding: 10px 4px;
             border-bottom: 1px solid var(--border-color);
-            font-size: 0.95rem;
+            font-size: 0.88rem;
+            cursor: pointer;
         }
+        .station-item:hover { background: rgba(255,255,255,0.03); }
         .station-item:last-child { border-bottom: none; }
-        .station-name { color: var(--text-main); }
-        .station-road { font-size: 0.75rem; color: var(--text-dim); display: block; }
-        .station-price { font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; white-space: nowrap; margin-left: 12px; }
-        .list-title { font-size: 0.9rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+        .station-road { font-size: 0.72rem; color: var(--text-dim); display: block; }
+        .station-badge {
+            display: inline-block;
+            font-size: 0.65rem;
+            padding: 1px 6px;
+            border-radius: 4px;
+            margin-left: 5px;
+            background: rgba(255,255,255,0.08);
+            color: var(--text-dim);
+        }
+        .station-price { font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; white-space: nowrap; margin-left: 10px; }
 
-        .actions-row { display: flex; gap: 10px; margin-top: 15px; flex-wrap: wrap; }
+        .actions-row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
         .action-pill {
-            flex: 1; min-width: 130px;
-            padding: 12px;
-            border-radius: 12px;
+            flex: 1; min-width: 110px;
+            padding: 11px 10px;
+            border-radius: 11px;
             border: 1px solid var(--border-color);
-            background: rgba(0,0,0,0.3);
+            background: var(--card-bg);
             color: var(--text-main);
             text-decoration: none;
             text-align: center;
             cursor: pointer;
             font-weight: 600;
-            font-size: 0.9rem;
+            font-size: 0.82rem;
             font-family: inherit;
-            transition: border-color 0.2s;
         }
-        .action-pill:hover { border-color: var(--accent); }
-        .action-pill.warn { color: #ffca00; border-color: rgba(255,202,0,0.4); }
+        .action-pill:hover { border-color: var(--accent); color: var(--accent); }
+        .action-pill.primary-nav { border-color: rgba(0,213,255,0.4); color: #00d5ff; }
+        .action-pill.warn { color: #ffca00; border-color: rgba(255,202,0,0.35); }
 
-        .disclaimer { font-size: 0.78rem; color: var(--text-dim); text-align: center; max-width: 600px; margin-top: 20px; line-height: 1.5; opacity: 0.8; }
-        .error-box { display:none; background: rgba(255,94,94,0.12); border: 1px solid rgba(255,94,94,0.4); color: #ff8a8a; padding: 14px; border-radius: 12px; margin-bottom: 14px; font-size: 0.92rem; }
-        header { width:100%; max-width:600px; display:flex; justify-content: space-between; align-items:flex-start; }
-        .lang-btn {
-            background: transparent; border: 1px solid var(--border-color); color: var(--text-dim);
-            font-weight: 700; font-size: 0.8rem; padding: 5px 12px; border-radius: 20px; cursor: pointer;
+        .disclaimer { font-size: 0.72rem; color: var(--text-dim); text-align: center; margin-top: 14px; line-height: 1.4; }
+        .error-box {
+            display: none;
+            background: rgba(255,82,82,0.15);
+            border: 1px solid rgba(255,82,82,0.45);
+            color: #ff9494;
+            padding: 11px;
+            border-radius: 10px;
+            margin-top: 10px;
+            font-size: 0.85rem;
         }
+
+        /* MapLibre Custom Marker */
+        .toll-marker {
+            background: #16191e;
+            border: 2px solid #ff9f43;
+            color: #fff;
+            padding: 2px 6px;
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: 800;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.6);
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .toll-marker.side-booth { border-color: #38bdf8; }
     </style>
 </head>
 <body>
-    <header>
-        <div></div>
-        <button class="lang-btn" id="langBtn">EN</button>
-    </header>
-    <h1>GreekTolls</h1>
-    <p class="tagline" data-i18n="tagline">Υπολόγισε τα διόδια του ταξιδιού σου</p>
+    <div id="map"></div>
 
-    <div class="card">
-        <!-- FROM -->
-        <div class="endpoint-row">
-            <div class="endpoint-head">
-                <span class="endpoint-label" data-i18n="from">Αφετηρία</span>
-                <button class="gps-btn" id="gpsBtn" onclick="useGpsOrigin()" data-i18n="use_gps">📍 Τοποθεσία μου</button>
+    <div class="app-shell">
+        <header class="interactive-panel">
+            <div class="brand-wrap">
+                <h1>GreekTolls</h1>
+                <p class="tagline" data-i18n="tagline">Υπολόγισε διόδια & οργάνωσε road trip</p>
             </div>
-            <div class="search-wrap">
-                <input type="text" id="fromInput" autocomplete="off" placeholder="π.χ. Αθήνα…">
-                <div class="geo-results" id="fromResults"></div>
+            <div class="header-actions">
+                <button class="pill-btn" id="mapToggleBtn" onclick="toggleMapSize()" data-i18n="toggle_map">🗺️ Χάρτης</button>
+                <button class="pill-btn" id="langBtn">EN</button>
+            </div>
+        </header>
+
+        <div class="map-peek"></div>
+
+        <div class="card interactive-panel">
+            <!-- FROM -->
+            <div class="endpoint-row">
+                <div class="endpoint-head">
+                    <span class="endpoint-label" data-i18n="from">Αφετηρία</span>
+                    <button class="gps-btn" id="gpsBtn" onclick="useGpsOrigin()" data-i18n="use_gps">📍 Τοποθεσία μου</button>
+                </div>
+                <div class="search-wrap">
+                    <input type="text" id="fromInput" autocomplete="off" placeholder="π.χ. Αθήνα…">
+                    <div class="geo-results" id="fromResults"></div>
+                </div>
+            </div>
+
+            <!-- DYNAMIC WAYPOINTS -->
+            <div id="waypointsContainer"></div>
+
+            <div class="route-controls">
+                <button class="add-stop-btn" onclick="addWaypoint()" data-i18n="add_stop">+ Προσθήκη στάσης</button>
+                <button class="swap-btn" onclick="swapCities()" aria-label="Swap">⇅</button>
+            </div>
+
+            <!-- TO -->
+            <div class="endpoint-row">
+                <div class="endpoint-head">
+                    <span class="endpoint-label" data-i18n="to">Προορισμός</span>
+                </div>
+                <div class="search-wrap">
+                    <input type="text" id="toInput" autocomplete="off" placeholder="π.χ. Θεσσαλονίκη…">
+                    <div class="geo-results" id="toResults"></div>
+                </div>
+            </div>
+
+            <!-- QUICK PICK CHIPS -->
+            <div class="quick-chips" id="quickChips"></div>
+
+            <label data-i18n="vehicle">Όχημα</label>
+            <div class="veh-grid" id="vehGrid"></div>
+
+            <div class="toggles">
+                <button class="toggle-chip" id="roundTripBtn" onclick="toggleRoundTrip()" data-i18n="round_trip">↔ Μετ' επιστροφής</button>
+                <button class="toggle-chip" id="ferryBtn" onclick="toggleFerry()" data-i18n="ferry_rio">⛴️ Φεριμπότ Ρίου</button>
+                <button class="toggle-chip" id="fuelToggleBtn" onclick="toggleFuel()" data-i18n="fuel_toggle">⛽ Καύσιμα</button>
+            </div>
+
+            <div class="fuel-grid" id="fuelBox">
+                <div>
+                    <label data-i18n="consumption">Κατανάλωση (L/100km)</label>
+                    <input type="number" id="consumptionInput" value="4.8" step="0.1" min="1" max="35" onchange="saveFuelPrefs()">
+                </div>
+                <div>
+                    <label data-i18n="fuel_price">Τιμή (€/L)</label>
+                    <input type="number" id="priceInput" value="1.82" step="0.01" min="0.5" max="3.5" onchange="saveFuelPrefs()">
+                </div>
+            </div>
+
+            <button class="go-btn" id="calcBtn" onclick="calculate()" data-i18n="calculate">Υπολογισμός Διαδρομής</button>
+            <div class="error-box" id="errBox"></div>
+        </div>
+
+        <div class="loader interactive-panel" id="loader"></div>
+
+        <div class="results interactive-panel" id="results">
+            <div class="total-card">
+                <div class="total-label" data-i18n="total_tolls">Συνολικά διόδια</div>
+                <div class="total-amount" id="totalAmount">0.00 €</div>
+                <div class="route-meta" id="routeMeta"></div>
+
+                <!-- Toll-Free Alternative Comparison -->
+                <div class="alt-banner" id="altBanner"></div>
+
+                <!-- Passenger Split Counter -->
+                <div class="split-bar">
+                    <span data-i18n="split_label">Κόστος ανά άτομο:</span>
+                    <div class="split-controls">
+                        <button class="split-step" onclick="changePassengers(-1)">−</button>
+                        <span id="paxCount">1 👤</span>
+                        <button class="split-step" onclick="changePassengers(1)">+</button>
+                        <span class="per-person-val" id="perPersonAmount">0.00 €</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="sub-stats" id="subStats"></div>
+
+            <div class="card">
+                <label data-i18n="stations_on_route">Σταθμοί στη διαδρομή (πάτα για εστίαση)</label>
+                <ul class="station-list" id="stationList"></ul>
+            </div>
+
+            <div class="actions-row">
+                <a class="action-pill primary-nav" id="gmapsLink" href="#" target="_blank" rel="noopener" data-i18n="open_maps">🗺️ Google Maps</a>
+                <button class="action-pill" onclick="shareResult()" data-i18n="share">📤 Μοιράσου</button>
+                <a class="action-pill warn" id="reportLink" href="#" target="_blank" rel="noopener" data-i18n="report_price">⚠️ Λάθος τιμή;</a>
             </div>
         </div>
 
-        <div class="row-swap">
-            <button class="swap-btn" onclick="swapCities()" aria-label="Swap">⇅</button>
-        </div>
-
-        <!-- TO -->
-        <div class="endpoint-row">
-            <div class="endpoint-head">
-                <span class="endpoint-label" data-i18n="to">Προορισμός</span>
-            </div>
-            <div class="search-wrap">
-                <input type="text" id="toInput" autocomplete="off" placeholder="π.χ. Θεσσαλονίκη…">
-                <div class="geo-results" id="toResults"></div>
-            </div>
-        </div>
-
-        <label data-i18n="vehicle">Όχημα</label>
-        <div class="veh-grid" id="vehGrid"></div>
-
-        <div class="toggles">
-            <button class="toggle-chip" id="roundTripBtn" onclick="toggleRoundTrip()" data-i18n="round_trip">↔ Μετ' επιστροφής</button>
-            <button class="toggle-chip" id="ferryBtn" onclick="toggleFerry()" title="Γέφυρα → Φεριμπότ Ρίου-Αντιρρίου">⛴️ Φεριμπότ Ρίου</button>
-            <button class="toggle-chip" id="fuelToggleBtn" onclick="toggleFuel()">⛽ Υπολογ. καυσίμων</button>
-        </div>
-
-        <div id="fuelBox" style="display:none; margin-bottom: 16px;">
-            <label data-i18n="consumption">Κατανάλωση (L/100km)</label>
-            <input type="number" id="consumptionInput" value="4.5" step="0.1" min="1" max="30">
-            <label style="margin-top:10px;" data-i18n="fuel_price">Τιμή καυσίμου (€/L)</label>
-            <input type="number" id="priceInput" value="1.80" step="0.01" min="0.5" max="3">
-        </div>
-
-        <button class="go-btn" id="calcBtn" onclick="calculate()" data-i18n="calculate">Υπολογισμός</button>
-        <div class="error-box" id="errBox"></div>
+        <p class="disclaimer interactive-panel" data-i18n="disclaimer">Τιμές 2026 (ενημέρωση Οκτώβριος 2026). Αλγόριθμος ακριβείας με διαχωρισμό μετωπικών/πλευρικών σταθμών.</p>
     </div>
 
-    <div class="loader" id="loader"></div>
-
-    <div class="results" id="results">
-        <div class="total-card">
-            <div class="total-label" data-i18n="total_tolls">Συνολικά διόδια</div>
-            <div class="total-amount" id="totalAmount">€0.00</div>
-            <div class="route-meta" id="routeMeta"></div>
-        </div>
-        <div class="sub-stats" id="subStats"></div>
-        <div class="card">
-            <div class="list-title" data-i18n="stations_on_route">Σταθμοί στη διαδρομή</div>
-            <ul class="station-list" id="stationList"></ul>
-        </div>
-        <div class="actions-row">
-            <button class="action-pill" onclick="shareResult()" data-i18n="share">Μοιράσου</button>
-            <a class="action-pill warn" id="reportLink" href="#" target="_blank" rel="noopener" data-i18n="report_price">Λάθος τιμή;</a>
-        </div>
-    </div>
-
-    <p class="disclaimer" data-i18n="disclaimer">Ενδεικτικές τιμές μετρητά, τελευταία ενημέρωση Αύγουστος 2026. Οι τιμές μπορεί να έχουν αλλάξει — αναφέρετε ασυμφωνίες.</p>
-
-    <script src="app.js?v=4"></script>
+    <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+    <script src="app.js?v=5"></script>
 </body>
 </html>
