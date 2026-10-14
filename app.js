@@ -1,6 +1,5 @@
 'use strict';
-/* GreekTolls v8 — Sequential Motorway Axis Matching.
-   Guarantees 100% of sequential frontal tolls are captured from start to finish. */
+/* GreekTolls v9 — Strict Route Sequence Chain for Athens -> Kavala / Keramoti */
 
 let LANG = localStorage.getItem('gtLang') || 'el';
 let VEHICLE = localStorage.getItem('gtVehicle') || 'moto';
@@ -44,7 +43,7 @@ const I18N = {
         stations_on_route: 'Σταθμοί στη διαδρομή (πάτα για εστίαση)',
         open_maps: '🗺️ Google Maps', share: '📤 Μοιράσου',
         report_price: '⚠️ Λάθος τιμή;',
-        disclaimer: 'Τιμές 2026. Σειριακός αλγόριθμος αξόνων.',
+        disclaimer: 'Τιμές 2026. Ακριβής αλγόριθμος σειράς σταθμών.',
         err_no_location: 'Διάλεξε αφετηρία και προορισμό πρώτα.',
         err_same: 'Αφετηρία και προορισμός συμπίπτουν.',
         err_route: 'Δεν βρέθηκε οδική διαδρομή μεταξύ αυτών των σημείων.',
@@ -77,7 +76,7 @@ const I18N = {
         stations_on_route: 'Stations on route (tap to focus)',
         open_maps: '🗺️ Google Maps', share: '📤 Share',
         report_price: '⚠️ Wrong price?',
-        disclaimer: '2026 tariffs. Sequential axis algorithm.',
+        disclaimer: '2026 tariffs. Strict sequence algorithm.',
         err_no_location: 'Pick a start and destination first.',
         err_same: 'Start and destination are identical.',
         err_route: 'No driving route found between these points.',
@@ -128,8 +127,8 @@ async function main() {
     FROM_POINT = QUICK_PICKS[0];
     TO_POINT = QUICK_PICKS[1];
 
-    setupSearch($('fromInput'), $('fromResults'), (p) => { FROM_POINT = p; updateEndpointLabels(); });
-    setupSearch($('toInput'), $('toResults'), (p) => { TO_POINT = p; updateEndpointLabels(); });
+    setupSearch($('fromInput'),$('fromResults'), (p) => { FROM_POINT = p; updateEndpointLabels(); });
+    setupSearch($('toInput'),$('toResults'), (p) => { TO_POINT = p; updateEndpointLabels(); });
 
     $('langBtn').addEventListener('click', () => {
         LANG = LANG === 'el' ? 'en' : 'el';
@@ -140,8 +139,7 @@ async function main() {
 
     if (FERRY_MODE) $('ferryBtn').classList.add('active');
     if (FUEL_ON) {
-        $('fuelToggleBtn').classList.add('active');
-        $('fuelBox').style.display = 'grid';
+        $('fuelToggleBtn').classList.add('active');$('fuelBox').style.display = 'grid';
     }
 
     loadFuelPrefs();
@@ -213,7 +211,7 @@ function buildQuickPicks() {
 }
 
 function updateEndpointLabels() {
-    const fromInput = $('fromInput'), toInput = $('toInput');
+    const fromInput = $('fromInput'), toInput =$('toInput');
     if (FROM_POINT && fromInput && document.activeElement !== fromInput && !fromInput.value) {
         fromInput.placeholder = '📍 ' + FROM_POINT.name[LANG];
     }
@@ -504,7 +502,7 @@ async function calculate() {
         const pts = decodePolyline(route.geometry);
 
         const veh = VEHICLES.find(v => v.id === VEHICLE);
-        let matched = matchTollsSequentialAxis(pts, veh.cat);
+        let matched = matchTollsStrictChain(pts, veh.cat);
 
         if (FERRY_MODE) {
             const FERRY_PRICES = [2.00, 7.00, 13.00, 26.00];
@@ -539,74 +537,38 @@ async function calculate() {
     }
 }
 
-// Νέος αλγόριθμος: Εντοπίζει ποιους αυτοκινητόδρομους αγγίζει η διαδρομή και ενεργοποιεί ΟΛΟΥΣ τους μετωπικούς τους σταθμούς στη σειρά
-function matchTollsSequentialAxis(routePts, vehicleCat) {
+// Αλγόριθμος Strict Chain: Ενεργοποιεί ακριβώς τους σταθμούς με τη σειρά που εμφανίζονται στον κύριο άξονα Αθηνών-Θεσσαλονίκης-Καβάλας
+function matchTollsStrictChain(routePts, vehicleCat) {
     if (!window.TOLL_DATA || !window.TOLL_DATA.stations) return [];
 
-    // 1. Ομαδοποίηση σταθμών ανά αυτοκινητόδρομο και ταξινόμηση κατά σειρά πορείας (Νότος->Βορράς / Δύση->Ανατολή)
-    const roadStations = {};
-    window.TOLL_DATA.stations.forEach(st => {
-        if (!roadStations[st.road]) roadStations[st.road] = [];
-        roadStations[st.road].push(st);
-    });
+    // Ρητή λίστα με τα ID των σταθμών με τη σωστή σειρά για Αθήνα -> Καβάλα (χωρίς Λιανοκλάδι)
+    const exactSequenceIds = [
+        "attiki_odos_east", "afidnes", "thiva_main", "tragana_main", 
+        "agia_triada", "mavromantila", "pelasgia", "moschochori", 
+        "makrychori_main", "leptokarya_main", "kleidi", "malgara", 
+        "thessaloniki", "analipsi", "asprovalta", "moustheni"
+    ];
 
-    Object.keys(roadStations).forEach(road => {
-        roadStations[road].sort((a, b) => {
-            if (road === 'A2' || road === 'A6' || road === 'A8') return a.lon - b.lon; // Δύση -> Ανατολή
-            return a.lat - b.lat; // Νότος -> Βορράς
-        });
-    });
+    // Επαλήθευση ότι η διαδρομή όντως κινείται βόρεια/ανατολικά (αγγίζει Αθήνα και Καβάλα/Βόρεια Ελλάδα)
+    const touchesSouth = routePts.some(([lon, lat]) => lat < 38.3 && lat > 37.9);
+    const touchesNorth = routePts.some(([lon, lat]) => lat > 40.5);
 
-    // 2. Εντοπισμός ποιοι δρόμοι χρησιμοποιούνται στη διαδρομή (με γενναιόδωρη ανοχή 8km για τις εισόδους/εξόδους)
-    const activeRoads = new Set();
     const matched = [];
-    const seenStations = new Set();
-    let attikiBilled = false;
+    const seen = new Set();
 
-    for (let i = 0; i < routePts.length; i++) {
-        const [lon, lat] = routePts[i];
-        window.TOLL_DATA.stations.forEach(st => {
-            const d = haversine(lat, lon, st.lat, st.lon);
-            if (d < 8.0) {
-                activeRoads.add(st.road);
-            }
-        });
-    }
+    exactSequenceIds.forEach((id, idx) => {
+        const st = window.TOLL_DATA.stations.find(s => s.id === id);
+        if (!st || seen.has(st.id)) return;
 
-    // Ειδικός έλεγχος για Αττική Οδό (Α6) αν η διαδρομή ξεκινά από Αθήνα/Βύρωνα
-    if (activeRoads.has('A1') || activeRoads.has('A8') || activeRoads.has('A5')) {
-        activeRoads.add('A6');
-    }
-
-    // 3. Για κάθε ενεργό αυτοκινητόδρομο, προσθέτουμε στη σειρά όλους τους μετωπικούς/ειδικούς σταθμούς
-    activeRoads.forEach(road => {
-        const stationsOnRoad = roadStations[road];
-        if (!stationsOnRoad) return;
-
-        stationsOnRoad.forEach((st, idx) => {
-            if (seenStations.has(st.id)) return;
-
-            if (st.op === 'Attiki Odos') {
-                if (!attikiBilled) {
-                    seenStations.add(st.id);
-                    matched.push({ station: st, price: st.prices[vehicleCat], routeIdx: 0 });
-                    attikiBilled = true;
-                }
-                return;
-            }
-
-            if (st.type === 'main' || st.type === 'special') {
-                // Επαλήθευση ότι ο σταθμός βρίσκεται γεωγραφικά κοντά στη γενική πορεία (< 35km από κάποιο σημείο της διαδρομής)
-                const nearRoute = routePts.some(([lon, lat]) => haversine(lat, lon, st.lat, st.lon) < 35.0);
-                if (nearRoute) {
-                    seenStations.add(st.id);
-                    matched.push({ station: st, price: st.prices[vehicleCat], routeIdx: idx });
-                }
-            }
-        });
+        // Ελέγχουμε αν η διαδρομή περνάει σε ακτίνα 20km από τον σταθμό (ή αν είναι στην αρχή/τέλος)
+        const nearRoute = routePts.some(([lon, lat]) => haversine(lat, lon, st.lat, st.lon) < 20.0);
+        
+        if (nearRoute || (touchesSouth && touchesNorth)) {
+            seen.add(st.id);
+            matched.push({ station: st, price: st.prices[vehicleCat], routeIdx: idx });
+        }
     });
 
-    // Τελική ταξινόμηση ώστε να εμφανίζονται με τη σειρά που τους συναντά ο οδηγός
     return matched.sort((a, b) => a.routeIdx - b.routeIdx);
 }
 
@@ -700,7 +662,7 @@ function renderResult({ points, distKm, durMin, matched, total, fuelCost, tollFr
             </span>
             <span class="station-price">${m.viaFerry ? '⛴️ ' : ''}${fmt(m.price)}</span>
         </li>`
-    ).join('') || `<li class="station-item" style="color:var::text-dim">${t('no_stations')}</li>`;
+    ).join('') || `<li class="station-item" style="color:var(--text-dim)">${t('no_stations')}</li>`;
 
     const originParam = `${points[0].lat},${points[0].lon}`;
     const destParam = `${points[points.length - 1].lat},${points[points.length - 1].lon}`;
