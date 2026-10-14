@@ -1,5 +1,5 @@
 'use strict';
-/* GreekTolls v5 — High-precision Greek motorway toll & road-trip calculator.
+/* GreekTolls v6 — High-precision Greek motorway toll & road-trip calculator.
    Free APIs: FOSSGIS OSRM + Valhalla OSM (routing/avoid-tolls), Komoot Photon (geocoding), OpenFreeMap + MapLibre (vector map). */
 
 let LANG = localStorage.getItem('gtLang') || 'el';
@@ -12,12 +12,11 @@ let LAST_RESULT = null;
 
 let FROM_POINT = null;
 let TO_POINT = null;
-let WAYPOINTS = []; // Array of { id, point: {name:{el,en}, lat, lon} | null }
+let WAYPOINTS = [];
 
 let map = null;
 let mapMarkers = [];
 
-// Free Keyless Endpoints
 const OSRM_SERVERS = [
     'https://routing.openstreetmap.de/routed-car/route/v1/driving/',
     'https://router.project-osrm.org/route/v1/driving/'
@@ -45,7 +44,7 @@ const I18N = {
         stations_on_route: 'Σταθμοί στη διαδρομή (πάτα για εστίαση)',
         open_maps: '🗺️ Google Maps', share: '📤 Μοιράσου',
         report_price: '⚠️ Λάθος τιμή;',
-        disclaimer: 'Τιμές 2026 (ενημέρωση Οκτώβριος 2026). Αλγόριθμος ακριβείας με διαχωρισμό μετωπικών/πλευρικών σταθμών.',
+        disclaimer: 'Τιμές 2026. Αλγόριθμος αντιστοίχισης αξόνων.',
         err_no_location: 'Διάλεξε αφετηρία και προορισμό πρώτα.',
         err_same: 'Αφετηρία και προορισμός συμπίπτουν.',
         err_route: 'Δεν βρέθηκε οδική διαδρομή μεταξύ αυτών των σημείων.',
@@ -78,7 +77,7 @@ const I18N = {
         stations_on_route: 'Stations on route (tap to focus)',
         open_maps: '🗺️ Google Maps', share: '📤 Share',
         report_price: '⚠️ Wrong price?',
-        disclaimer: '2026 tariffs (updated October 2026). Precision matcher distinguishes frontal and lateral toll plazas.',
+        disclaimer: '2026 tariffs. Axis-sequential matching algorithm.',
         err_no_location: 'Pick a start and destination first.',
         err_same: 'Start and destination are identical.',
         err_route: 'No driving route found between these points.',
@@ -117,7 +116,7 @@ const QUICK_PICKS = [
     { name: { el: 'Καβάλα', en: 'Kavala' }, lat: 40.9392, lon: 24.4064 },
     { name: { el: 'Αλεξανδρούπολη', en: 'Alexandroupoli' }, lat: 40.8516, lon: 25.8772 },
     { name: { el: 'Χαλκίδα', en: 'Chalkida' }, lat: 38.4636, lon: 23.6021 },
-    { name: { el: ' Ναύπλιο', en: 'Nafplio' }, lat: 37.5673, lon: 22.8016 }
+    { name: { el: 'Ναύπλιο', en: 'Nafplio' }, lat: 37.5673, lon: 22.8016 }
 ];
 
 const $ = (id) => document.getElementById(id);
@@ -129,8 +128,8 @@ async function main() {
     FROM_POINT = QUICK_PICKS[0];
     TO_POINT = QUICK_PICKS[1];
 
-    setupSearch($('fromInput'), $('fromResults'), (p) => { FROM_POINT = p; updateEndpointLabels(); });
-    setupSearch($('toInput'), $('toResults'), (p) => { TO_POINT = p; updateEndpointLabels(); });
+    setupSearch($('fromInput'),$('fromResults'), (p) => { FROM_POINT = p; updateEndpointLabels(); });
+    setupSearch($('toInput'),$('toResults'), (p) => { TO_POINT = p; updateEndpointLabels(); });
 
     $('langBtn').addEventListener('click', () => {
         LANG = LANG === 'el' ? 'en' : 'el';
@@ -141,8 +140,7 @@ async function main() {
 
     if (FERRY_MODE) $('ferryBtn').classList.add('active');
     if (FUEL_ON) {
-        $('fuelToggleBtn').classList.add('active');
-        $('fuelBox').style.display = 'grid';
+        $('fuelToggleBtn').classList.add('active');$('fuelBox').style.display = 'grid';
     }
 
     loadFuelPrefs();
@@ -156,7 +154,6 @@ async function main() {
         console.error('tolls.json failed to load', e);
     }
 
-    // Check if URL has shared route state
     if (restoreStateFromUrl()) {
         calculate();
     }
@@ -206,7 +203,6 @@ function buildQuickPicks() {
         btn.className = 'city-chip';
         btn.textContent = city.name[LANG];
         btn.onclick = () => {
-            // Set destination if From is already set, otherwise set From
             TO_POINT = city;
             $('toInput').value = city.name[LANG];
             updateEndpointLabels();
@@ -216,7 +212,7 @@ function buildQuickPicks() {
 }
 
 function updateEndpointLabels() {
-    const fromInput = $('fromInput'), toInput = $('toInput');
+    const fromInput = $('fromInput'), toInput =$('toInput');
     if (FROM_POINT && fromInput && document.activeElement !== fromInput && !fromInput.value) {
         fromInput.placeholder = '📍 ' + FROM_POINT.name[LANG];
     }
@@ -225,7 +221,6 @@ function updateEndpointLabels() {
     }
 }
 
-// Komoot Photon Free Autocomplete Search (supports villages, streets, POIs in Greece)
 function setupSearch(input, resultsBox, onPick) {
     let debounceTimer = null;
 
@@ -272,12 +267,10 @@ function setupSearch(input, resultsBox, onPick) {
     });
 }
 
-// Multi-stop Waypoints
 function addWaypoint(initialPoint = null) {
     if (WAYPOINTS.length >= 4) return;
     const id = 'wp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
-    const wpObj = { id, point: initialPoint };
-    WAYPOINTS.push(wpObj);
+    WAYPOINTS.push({ id, point: initialPoint });
     renderWaypoints();
 }
 
@@ -303,13 +296,10 @@ function renderWaypoints() {
             </div>
         `;
         container.appendChild(row);
-        const inp = $(`input_${wp.id}`);
-        const res = $(`results_${wp.id}`);
-        setupSearch(inp, res, (picked) => { wp.point = picked; });
+        setupSearch($(`input_${wp.id}`), $(`results_${wp.id}`), (picked) => { wp.point = picked; });
     });
 }
 
-// Working GPS Reverse Geocoding via Komoot Photon
 async function useGpsOrigin() {
     if (!navigator.geolocation) { showError(t('err_gps')); return; }
     const btn = $('gpsBtn');
@@ -337,7 +327,7 @@ async function useGpsOrigin() {
                 const label = p.name || p.city || p.town || p.village || p.street;
                 if (label) FROM_POINT.name = { el: label, en: label };
             }
-        } catch (e) { /* keep default GPS label */ }
+        } catch (e) {}
         $('fromInput').value = FROM_POINT.name[LANG];
         updateEndpointLabels();
     }, (err) => {
@@ -389,7 +379,6 @@ function applyLang() {
     updateEndpointLabels();
 }
 
-// Fixed swapCities: swaps both memory references and input text values
 function swapCities() {
     [FROM_POINT, TO_POINT] = [TO_POINT, FROM_POINT];
     const fromInput = $('fromInput'), toInput =$('toInput');
@@ -439,7 +428,6 @@ function showError(msg) {
     setTimeout(() => { box.style.display = 'none'; }, 5000);
 }
 
-// Race FOSSGIS OSRM and Project OSRM for fast, resilient routing
 async function fetchRouteOSRM(points) {
     const coordString = points.map(p => `${p.lon},${p.lat}`).join(';');
     const query = `${coordString}?overview=full&alternatives=false&steps=false`;
@@ -460,7 +448,6 @@ async function fetchRouteOSRM(points) {
     throw new Error('All routing servers failed');
 }
 
-// Fetch Toll-Free Alternative via Valhalla OSM in parallel
 async function fetchTollFreeValhalla(points) {
     try {
         const body = {
@@ -516,9 +503,8 @@ async function calculate() {
         const pts = decodePolyline(route.geometry);
 
         const veh = VEHICLES.find(v => v.id === VEHICLE);
-        let matched = matchTollsPrecise(pts, veh.cat);
+        let matched = matchTollsAxisSequential(pts, veh.cat);
 
-        // Ferry swap for Rio-Antirrio Bridge
         if (FERRY_MODE) {
             const FERRY_PRICES = [2.00, 7.00, 13.00, 26.00];
             matched = matched.map(m => {
@@ -552,54 +538,54 @@ async function calculate() {
     }
 }
 
-// High-precision segment matcher: distinguishes frontal booths from lateral exit ramps
-function matchTollsPrecise(routePts, vehicleCat) {
+// Αλγόριθμος Axis-Sequential: Ομαδοποιεί τους σταθμούς ανά άξονα και εντοπίζει ποιοι αυτοκινητόδρομοι χρησιμοποιούνται
+function matchTollsAxisSequential(routePts, vehicleCat) {
+    if (!window.TOLL_DATA || !window.TOLL_DATA.stations) return [];
+
+    const roadStations = {};
+    window.TOLL_DATA.stations.forEach(st => {
+        if (!roadStations[st.road]) roadStations[st.road] = [];
+        roadStations[st.road].push(st);
+    });
+
+    Object.keys(roadStations).forEach(road => {
+        roadStations[road].sort((a, b) => {
+            if (road === 'A2' || road === 'A8') return a.lon - b.lon;
+            return a.lat - b.lat;
+        });
+    });
+
     const matched = [];
-    const seen = new Set();
+    const seenStations = new Set();
     let attikiBilled = false;
 
-    for (let i = 0; i < routePts.length - 1; i++) {
-        const [lon1, lat1] = routePts[i];
-        const [lon2, lat2] = routePts[i + 1];
+    // Σάρωση διαδρομής ανά 3 σημεία για ανίχνευση αξόνων με ανοχή 3.5km
+    for (let i = 0; i < routePts.length; i += 3) {
+        const [lon, lat] = routePts[i];
+        
+        window.TOLL_DATA.stations.forEach(st => {
+            if (seenStations.has(st.id)) return;
 
-        for (const st of window.TOLL_DATA.stations) {
-            if (seen.has(st.id)) continue;
-
-            // Fast bounding-box pre-filter (~1.6 km) before running trigonometry
-            if (Math.abs(lat1 - st.lat) > 0.015 || Math.abs(lon1 - st.lon) > 0.015) continue;
-
-            const d = pointToSegmentKm(st.lat, st.lon, lat1, lon1, lat2, lon2);
-            // Frontal plazas must be within 350m of the highway centerline; side ramps within 180m
-            const maxRadius = st.op === 'Attiki Odos' ? 0.90 : (st.type === 'main' || st.type === 'special' ? 0.35 : 0.18);
-
-            if (d <= maxRadius) {
+            const d = haversine(lat, lon, st.lat, st.lon);
+            if (d < 3.5) {
                 if (st.op === 'Attiki Odos') {
-                    if (attikiBilled) continue;
-                    attikiBilled = true;
+                    if (!attikiBilled) {
+                        seenStations.add(st.id);
+                        matched.push({ station: st, price: st.prices[vehicleCat], routeIdx: i });
+                        attikiBilled = true;
+                    }
+                    return;
                 }
-                seen.add(st.id);
-                matched.push({ station: st, price: st.prices[vehicleCat], routeIdx: i });
+
+                if (st.type === 'main' || st.type === 'special') {
+                    seenStations.add(st.id);
+                    matched.push({ station: st, price: st.prices[vehicleCat], routeIdx: i });
+                }
             }
-        }
+        });
     }
 
-    // Filter out lateral ('side') booths if the driver stayed on the motorway and crossed a frontal ('main') booth nearby
-    const mainHits = matched.filter(m => m.station.type === 'main');
-    return matched.filter(m => {
-        if (m.station.type !== 'side') return true;
-        const nearbyMainOnSameRoad = mainHits.some(mainHit =>
-            mainHit.station.road === m.station.road &&
-            haversine(mainHit.station.lat, mainHit.station.lon, m.station.lat, m.station.lon) < 12
-        );
-        return !nearbyMainOnSameRoad;
-    }).sort((a, b) => a.routeIdx - b.routeIdx);
-}
-
-function pointToSegmentKm(px, py, x1, y1, x2, y2) {
-    const dx = x2 - x1, dy = y2 - y1;
-    if (dx === 0 && dy === 0) return haversine(px, py, x1, y1);
-    const tParam = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy)));
-    return haversine(px, py, x1 + tParam * dx, y1 + tParam * dy);
+    return matched.sort((a, b) => a.routeIdx - b.routeIdx);
 }
 
 function drawRouteOnMap(pts, matched, allPoints) {
@@ -610,11 +596,9 @@ function drawRouteOnMap(pts, matched, allPoints) {
         geometry: { type: 'LineString', coordinates: pts }
     });
 
-    // Clear previous markers
     mapMarkers.forEach(m => m.remove());
     mapMarkers = [];
 
-    // Add toll markers
     matched.forEach(m => {
         const el = document.createElement('div');
         el.className = 'toll-marker' + (m.station.type === 'side' ? ' side-booth' : '');
@@ -627,7 +611,6 @@ function drawRouteOnMap(pts, matched, allPoints) {
         mapMarkers.push(marker);
     });
 
-    // Fit map bounds to route
     const bounds = new maplibregl.LngLatBounds();
     pts.forEach(coord => bounds.extend(coord));
     map.fitBounds(bounds, { padding: { top: 60, bottom: 260, left: 40, right: 40 }, maxZoom: 12 });
@@ -655,7 +638,6 @@ function renderResult({ points, distKm, durMin, matched, total, fuelCost, tollFr
         `${namesChain}<br>${totalDist} km · ${hrs}h ${mins}m` +
         (ROUND_TRIP ? ` <span style="color:var(--accent)">${t('roundtrip_note')}</span>` : '');
 
-    // Toll-free comparison banner
     const altBanner = $('altBanner');
     if (tollFreeSummary && total > 0) {
         const diffMin = Math.max(0, (tollFreeSummary.durMin - durMin) * mult);
@@ -698,7 +680,6 @@ function renderResult({ points, distKm, durMin, matched, total, fuelCost, tollFr
         </li>`
     ).join('') || `<li class="station-item" style="color:var(--text-dim)">${t('no_stations')}</li>`;
 
-    // Deep-link into Google Maps with all stops
     const originParam = `${points[0].lat},${points[0].lon}`;
     const destParam = `${points[points.length - 1].lat},${points[points.length - 1].lon}`;
     const wpParam = points.length > 2
@@ -706,7 +687,6 @@ function renderResult({ points, distKm, durMin, matched, total, fuelCost, tollFr
         : '';
     $('gmapsLink').href = `https://www.google.com/maps/dir/?api=1&origin=${originParam}&destination=${destParam}${wpParam}&travelmode=driving`;
 
-    // Prefilled mailto report link
     const subject = encodeURIComponent('GreekTolls: Αναφορά τιμής διοδίων');
     const body = encodeURIComponent(
         `Διαδρομή: ${points.map(p => p.name.el).join(' -> ')}\n` +
@@ -719,7 +699,6 @@ function renderResult({ points, distKm, durMin, matched, total, fuelCost, tollFr
     $('results').style.display = 'block';
 }
 
-// URL State Sync & Sharing
 function syncStateToUrl() {
     if (!FROM_POINT || !TO_POINT) return;
     const params = new URLSearchParams();
