@@ -29,7 +29,6 @@
             -webkit-tap-highlight-color: transparent;
         }
 
-        /* Fullscreen Interactive Map */
         #map {
             position: fixed;
             inset: 0;
@@ -37,7 +36,6 @@
             background: #0d0f12;
         }
 
-        /* Floating App Shell (Sidebar on Desktop, Bottom Sheet on Mobile) */
         .app-shell {
             position: relative;
             z-index: 10;
@@ -96,7 +94,6 @@
         }
         .pill-btn:hover { border-color: var(--accent); color: var(--accent); }
 
-        /* Map Spacer on Mobile so user sees map at top */
         .map-peek {
             height: 22vh;
             pointer-events: none;
@@ -175,7 +172,6 @@
             font-family: inherit;
         }
 
-        /* Waypoints & Swap Controls */
         .route-controls {
             display: flex;
             justify-content: space-between;
@@ -217,7 +213,6 @@
             flex-shrink: 0;
         }
 
-        /* Quick City Chips */
         .quick-chips {
             display: flex;
             gap: 6px;
@@ -241,7 +236,6 @@
         }
         .city-chip:hover { border-color: var(--accent); color: var(--text-main); }
 
-        /* Vehicle Grid */
         .veh-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; margin-bottom: 12px; }
         .veh-btn {
             padding: 9px 4px;
@@ -262,7 +256,6 @@
             background: rgba(255,159,67,0.1);
         }
 
-        /* Option Toggles */
         .toggles { display: flex; gap: 7px; margin-bottom: 14px; flex-wrap: wrap; }
         .toggle-chip {
             padding: 7px 12px;
@@ -317,7 +310,6 @@
         }
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        /* Results Section */
         .results { display: none; animation: fadeIn 0.25s ease; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
@@ -344,7 +336,6 @@
         .route-meta { color: var(--text-dim); font-size: 0.88rem; line-height: 1.4; }
         .route-meta b { color: var(--text-main); }
 
-        /* Avoid Tolls Comparison Banner */
         .alt-banner {
             display: none;
             margin-top: 12px;
@@ -360,7 +351,6 @@
             gap: 8px;
         }
 
-        /* Passenger Cost Split Bar */
         .split-bar {
             display: flex;
             justify-content: space-between;
@@ -447,7 +437,6 @@
             font-size: 0.85rem;
         }
 
-        /* MapLibre Custom Marker */
         .toll-marker {
             background: #16191e;
             border: 2px solid #ff9f43;
@@ -481,7 +470,6 @@
         <div class="map-peek"></div>
 
         <div class="card interactive-panel">
-            <!-- FROM -->
             <div class="endpoint-row">
                 <div class="endpoint-head">
                     <span class="endpoint-label" data-i18n="from">Αφετηρία</span>
@@ -493,7 +481,6 @@
                 </div>
             </div>
 
-            <!-- DYNAMIC WAYPOINTS -->
             <div id="waypointsContainer"></div>
 
             <div class="route-controls">
@@ -501,7 +488,6 @@
                 <button class="swap-btn" onclick="swapCities()" aria-label="Swap">⇅</button>
             </div>
 
-            <!-- TO -->
             <div class="endpoint-row">
                 <div class="endpoint-head">
                     <span class="endpoint-label" data-i18n="to">Προορισμός</span>
@@ -512,7 +498,6 @@
                 </div>
             </div>
 
-            <!-- QUICK PICK CHIPS -->
             <div class="quick-chips" id="quickChips"></div>
 
             <label data-i18n="vehicle">Όχημα</label>
@@ -522,6 +507,7 @@
                 <button class="toggle-chip" id="roundTripBtn" onclick="toggleRoundTrip()" data-i18n="round_trip">↔ Μετ' επιστροφής</button>
                 <button class="toggle-chip" id="ferryBtn" onclick="toggleFerry()" data-i18n="ferry_rio">⛴️ Φεριμπότ Ρίου</button>
                 <button class="toggle-chip" id="fuelToggleBtn" onclick="toggleFuel()" data-i18n="fuel_toggle">⛽ Καύσιμα</button>
+                <button class="toggle-chip" id="tollFreeToggleBtn" onclick="toggleTollFree()" data-i18n="toll_free">🛣️ Χωρίς διόδια</button>
             </div>
 
             <div class="fuel-grid" id="fuelBox">
@@ -547,10 +533,8 @@
                 <div class="total-amount" id="totalAmount">0.00 €</div>
                 <div class="route-meta" id="routeMeta"></div>
 
-                <!-- Toll-Free Alternative Comparison -->
                 <div class="alt-banner" id="altBanner"></div>
 
-                <!-- Passenger Split Counter -->
                 <div class="split-bar">
                     <span data-i18n="split_label">Κόστος ανά άτομο:</span>
                     <div class="split-controls">
@@ -576,10 +560,10 @@
             </div>
         </div>
 
-        <p class="disclaimer interactive-panel" data-i18n="disclaimer">Τιμές 2026 (ενημέρωση Οκτώβριος 2026). Αλγόριθμος ακριβείας με διαχωρισμό μετωπικών/πλευρικών σταθμών.</p>
+        <p class="disclaimer interactive-panel" data-i18n="disclaimer">Τιμές 2026. Ακριβής αλγόριθμος σειράς σταθμών.</p>
     </div>
 
     <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-    <script src="app.js?v=5"></script>
+    <script src="app.js?v=10"></script>
 </body>
 </html>
