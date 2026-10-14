@@ -1,5 +1,5 @@
 'use strict';
-/* GreekTolls v6 — High-precision Greek motorway toll & road-trip calculator.
+/* GreekTolls v7 — High-precision Greek motorway toll & road-trip calculator.
    Free APIs: FOSSGIS OSRM + Valhalla OSM (routing/avoid-tolls), Komoot Photon (geocoding), OpenFreeMap + MapLibre (vector map). */
 
 let LANG = localStorage.getItem('gtLang') || 'el';
@@ -538,36 +538,22 @@ async function calculate() {
     }
 }
 
-// Αλγόριθμος Axis-Sequential: Ομαδοποιεί τους σταθμούς ανά άξονα και εντοπίζει ποιοι αυτοκινητόδρομοι χρησιμοποιούνται
+// Διορθωμένος αλγόριθμος: σάρωση κάθε σημείου (i++) με αυξημένη ανοχή 5km για κάλυψη εκκινήσεων εντός πόλης (π.χ. Βύρωνας)
 function matchTollsAxisSequential(routePts, vehicleCat) {
     if (!window.TOLL_DATA || !window.TOLL_DATA.stations) return [];
-
-    const roadStations = {};
-    window.TOLL_DATA.stations.forEach(st => {
-        if (!roadStations[st.road]) roadStations[st.road] = [];
-        roadStations[st.road].push(st);
-    });
-
-    Object.keys(roadStations).forEach(road => {
-        roadStations[road].sort((a, b) => {
-            if (road === 'A2' || road === 'A8') return a.lon - b.lon;
-            return a.lat - b.lat;
-        });
-    });
 
     const matched = [];
     const seenStations = new Set();
     let attikiBilled = false;
 
-    // Σάρωση διαδρομής ανά 3 σημεία για ανίχνευση αξόνων με ανοχή 3.5km
-    for (let i = 0; i < routePts.length; i += 3) {
+    for (let i = 0; i < routePts.length; i++) {
         const [lon, lat] = routePts[i];
         
         window.TOLL_DATA.stations.forEach(st => {
             if (seenStations.has(st.id)) return;
 
             const d = haversine(lat, lon, st.lat, st.lon);
-            if (d < 3.5) {
+            if (d < 5.0) {
                 if (st.op === 'Attiki Odos') {
                     if (!attikiBilled) {
                         seenStations.add(st.id);
