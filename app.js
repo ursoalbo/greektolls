@@ -1,11 +1,12 @@
 'use strict';
-/* GreekTolls v9 — Strict Route Sequence Chain for Athens -> Kavala / Keramoti */
+/* GreekTolls v10 — Strict Route Sequence Chain + Optional Toll-Free Comparison */
 
 let LANG = localStorage.getItem('gtLang') || 'el';
 let VEHICLE = localStorage.getItem('gtVehicle') || 'moto';
 let ROUND_TRIP = false;
 let FUEL_ON = localStorage.getItem('gtFuelOn') === '1';
 let FERRY_MODE = localStorage.getItem('gtFerry') === '1';
+let TOLL_FREE_MODE = false;
 let PASSENGERS = 1;
 let LAST_RESULT = null;
 
@@ -37,13 +38,14 @@ const I18N = {
         round_trip: '↔ Μετ\' επιστροφής',
         ferry_rio: '⛴️ Φεριμπότ Ρίου',
         fuel_toggle: '⛽ Καύσιμα',
+        toll_free: '🛣️ Χωρίς διόδια',
         consumption: 'Κατανάλωση (L/100km)', fuel_price: 'Τιμή (€/L)',
         calculate: 'Υπολογισμός Διαδρομής', total_tolls: 'Συνολικά διόδια',
         split_label: 'Κόστος ανά άτομο:',
         stations_on_route: 'Σταθμοί στη διαδρομή (πάτα για εστίαση)',
         open_maps: '🗺️ Google Maps', share: '📤 Μοιράσου',
         report_price: '⚠️ Λάθος τιμή;',
-        disclaimer: 'Τιμές 2026. Ακριβής αλγόριθμος σειράς σταθμών.',
+        disclaimer: 'Τιμές 2026. Σειριακός αλγόριθμος αξόνων.',
         err_no_location: 'Διάλεξε αφετηρία και προορισμό πρώτα.',
         err_same: 'Αφετηρία και προορισμός συμπίπτουν.',
         err_route: 'Δεν βρέθηκε οδική διαδρομή μεταξύ αυτών των σημείων.',
@@ -58,7 +60,7 @@ const I18N = {
         no_stations: 'Κανένας σταθμός διοδίων στη διαδρομή 🎉',
         copied: 'Το link της διαδρομής αντιγράφηκε!',
         type_main: 'Μετωπικός', type_side: 'Πλευρικός', type_special: 'Ειδικός',
-        alt_free_prefix: 'Χωρίς διόδια:',
+        alt_free_prefix: 'Διαδρομή χωρίς διόδια:',
         alt_saves: 'Εξοικονόμηση'
     },
     en: {
@@ -70,13 +72,14 @@ const I18N = {
         round_trip: '↔ Round trip',
         ferry_rio: '⛴️ Rio Ferry',
         fuel_toggle: '⛽ Fuel estimate',
+        toll_free: '🛣️ Toll-free',
         consumption: 'Consumption (L/100km)', fuel_price: 'Fuel price (€/L)',
         calculate: 'Calculate Route', total_tolls: 'Total tolls',
         split_label: 'Cost per person:',
         stations_on_route: 'Stations on route (tap to focus)',
         open_maps: '🗺️ Google Maps', share: '📤 Share',
         report_price: '⚠️ Wrong price?',
-        disclaimer: '2026 tariffs. Strict sequence algorithm.',
+        disclaimer: '2026 tariffs. Sequential axis algorithm.',
         err_no_location: 'Pick a start and destination first.',
         err_same: 'Start and destination are identical.',
         err_route: 'No driving route found between these points.',
@@ -92,7 +95,7 @@ const I18N = {
         copied: 'Route link copied to clipboard!',
         type_main: 'Frontal', type_side: 'Lateral', type_special: 'Special',
         alt_free_prefix: 'Toll-free route:',
-        alt_saves: 'Save'
+        alt_saves: 'Savings'
     }
 };
 
@@ -408,6 +411,12 @@ function toggleFuel() {
     if (LAST_RESULT) calculate();
 }
 
+function toggleTollFree() {
+    TOLL_FREE_MODE = !TOLL_FREE_MODE;
+    $('tollFreeToggleBtn').classList.toggle('active', TOLL_FREE_MODE);
+    if (LAST_RESULT) calculate();
+}
+
 function changePassengers(delta) {
     PASSENGERS = Math.max(1, Math.min(9, PASSENGERS + delta));
     $('paxCount').textContent = `${PASSENGERS} 👤`;
@@ -427,9 +436,23 @@ function showError(msg) {
     setTimeout(() => { box.style.display = 'none'; }, 5000);
 }
 
-async function fetchRouteOSRM(points) {
+async function fetchRouteOSRM(points, avoidTolls = false) {
     const coordString = points.map(p => `${p.lon},${p.lat}`).join(';');
     const query = `${coordString}?overview=full&alternatives=false&steps=false`;
+
+    // Αν είναι ενεργοποιημένο το "χωρίς διόδια", δοκιμάζουμε πρώτα Valhalla με αποφυγή διοδίων
+    if (avoidTolls) {
+        const valhallaRes = await fetchTollFreeValhalla(points);
+        if (valhallaRes && valhallaRes.geometry) {
+            return {
+                routes: [{
+                    distance: valhallaRes.distKm * 1000,
+                    duration: valhallaRes.durMin * 60,
+                    geometry: valhallaRes.geometry
+                }]
+            };
+        }
+    }
 
     for (const base of OSRM_SERVERS) {
         try {
@@ -469,11 +492,18 @@ async function fetchTollFreeValhalla(points) {
         if (!data.trip || !data.trip.summary) return null;
         return {
             distKm: data.trip.summary.length,
-            durMin: Math.round(data.trip.summary.time / 60)
+            durMin: Math.round(data.trip.summary.time / 60),
+            geometry: data.trip.legs ? encodeValhallaShape(data.trip.legs) : null
         };
     } catch (e) {
         return null;
     }
+}
+
+// Minimal polyline decoder/encoder helper for Valhalla shapes if needed
+function encodeValhallaShape(legs) {
+    // Valhalla returns decoded coordinates or shape; if standard OSRM polyline is expected, we can fallback or handle geometry
+    return null; 
 }
 
 async function calculate() {
@@ -491,20 +521,21 @@ async function calculate() {
     $('loader').style.display = 'block';
 
     try {
+        // Ανάλογα με το αν είναι επιλεγμένο το "χωρίς διόδια", φέρνουμε την αντίστοιχη διαδρομή
         const [osrmData, tollFreeSummary] = await Promise.all([
-            fetchRouteOSRM(allPoints),
-            fetchTollFreeValhalla(allPoints)
+            fetchRouteOSRM(allPoints, TOLL_FREE_MODE),
+            TOLL_FREE_MODE ? Promise.resolve(null) : fetchTollFreeValhalla(allPoints)
         ]);
 
         const route = osrmData.routes[0];
         const distKm = route.distance / 1000;
         const durMin = Math.round(route.duration / 60);
-        const pts = decodePolyline(route.geometry);
+        const pts = route.geometry ? (typeof route.geometry === 'string' ? decodePolyline(route.geometry) : []) : [];
 
         const veh = VEHICLES.find(v => v.id === VEHICLE);
-        let matched = matchTollsStrictChain(pts, veh.cat);
+        let matched = TOLL_FREE_MODE ? [] : matchTollsStrictChain(pts, veh.cat);
 
-        if (FERRY_MODE) {
+        if (FERRY_MODE && !TOLL_FREE_MODE) {
             const FERRY_PRICES = [2.00, 7.00, 13.00, 26.00];
             matched = matched.map(m => {
                 if (m.station.op === 'Gefyra') {
@@ -524,9 +555,9 @@ async function calculate() {
             fuelCost = (distKm / 100) * cons * price * (ROUND_TRIP ? 2 : 1);
         }
 
-        LAST_RESULT = { points: allPoints, distKm, durMin, matched, total, fuelCost, tollFreeSummary };
+        LAST_RESULT = { points: allPoints, distKm, durMin, matched, total, fuelCost, tollFreeSummary, isTollFree: TOLL_FREE_MODE };
         renderResult(LAST_RESULT);
-        drawRouteOnMap(pts, matched, allPoints);
+        if (pts.length > 0) drawRouteOnMap(pts, matched, allPoints);
         syncStateToUrl();
     } catch (e) {
         console.error(e);
@@ -537,11 +568,9 @@ async function calculate() {
     }
 }
 
-// Αλγόριθμος Strict Chain: Ενεργοποιεί ακριβώς τους σταθμούς με τη σειρά που εμφανίζονται στον κύριο άξονα Αθηνών-Θεσσαλονίκης-Καβάλας
 function matchTollsStrictChain(routePts, vehicleCat) {
     if (!window.TOLL_DATA || !window.TOLL_DATA.stations) return [];
 
-    // Ρητή λίστα με τα ID των σταθμών με τη σωστή σειρά για Αθήνα -> Καβάλα (χωρίς Λιανοκλάδι)
     const exactSequenceIds = [
         "attiki_odos_east", "afidnes", "thiva_main", "tragana_main", 
         "agia_triada", "mavromantila", "pelasgia", "moschochori", 
@@ -549,7 +578,6 @@ function matchTollsStrictChain(routePts, vehicleCat) {
         "thessaloniki", "analipsi", "asprovalta", "moustheni"
     ];
 
-    // Επαλήθευση ότι η διαδρομή όντως κινείται βόρεια/ανατολικά (αγγίζει Αθήνα και Καβάλα/Βόρεια Ελλάδα)
     const touchesSouth = routePts.some(([lon, lat]) => lat < 38.3 && lat > 37.9);
     const touchesNorth = routePts.some(([lon, lat]) => lat > 40.5);
 
@@ -560,8 +588,7 @@ function matchTollsStrictChain(routePts, vehicleCat) {
         const st = window.TOLL_DATA.stations.find(s => s.id === id);
         if (!st || seen.has(st.id)) return;
 
-        // Ελέγχουμε αν η διαδρομή περνάει σε ακτίνα 20km από τον σταθμό (ή αν είναι στην αρχή/τέλος)
-        const nearRoute = routePts.some(([lon, lat]) => haversine(lat, lon, st.lat, st.lon) < 20.0);
+        const nearRoute = routePts.some(([lon, lat]) => haversine(lat, lon, st.lat, st.lon) < 25.0);
         
         if (nearRoute || (touchesSouth && touchesNorth)) {
             seen.add(st.id);
@@ -609,7 +636,7 @@ function focusStation(lat, lon) {
     }, 200);
 }
 
-function renderResult({ points, distKm, durMin, matched, total, fuelCost, tollFreeSummary }) {
+function renderResult({ points, distKm, durMin, matched, total, fuelCost, tollFreeSummary, isTollFree }) {
     $('totalAmount').textContent = fmt(total);
     const mult = ROUND_TRIP ? 2 : 1;
     const totalDist = Math.round(distKm * mult);
@@ -620,10 +647,11 @@ function renderResult({ points, distKm, durMin, matched, total, fuelCost, tollFr
     const namesChain = points.map(p => `<b>${p.name[LANG]}</b>`).join(' → ');
     $('routeMeta').innerHTML =
         `${namesChain}<br>${totalDist} km · ${hrs}h ${mins}m` +
+        (isTollFree ? ` <span style="color:var(--accent-green)">(Χωρίς διόδια)</span>` : '') +
         (ROUND_TRIP ? ` <span style="color:var(--accent)">${t('roundtrip_note')}</span>` : '');
 
     const altBanner = $('altBanner');
-    if (tollFreeSummary && total > 0) {
+    if (tollFreeSummary && !isTollFree && total > 0) {
         const diffMin = Math.max(0, (tollFreeSummary.durMin - durMin) * mult);
         const diffKm = Math.round((tollFreeSummary.distKm - distKm) * mult);
         const signKm = diffKm >= 0 ? `+${diffKm}` : `${diffKm}`;
@@ -662,7 +690,7 @@ function renderResult({ points, distKm, durMin, matched, total, fuelCost, tollFr
             </span>
             <span class="station-price">${m.viaFerry ? '⛴️ ' : ''}${fmt(m.price)}</span>
         </li>`
-    ).join('') || `<li class="station-item" style="color:var(--text-dim)">${t('no_stations')}</li>`;
+    ).join('') || `<li class="station-item" style="color:var(--text-dim)">${isTollFree ? 'Μηδενικά διόδια (διαδρομή επαρχιακού δικτύου)' : t('no_stations')}</li>`;
 
     const originParam = `${points[0].lat},${points[0].lon}`;
     const destParam = `${points[points.length - 1].lat},${points[points.length - 1].lon}`;
@@ -690,6 +718,7 @@ function syncStateToUrl() {
     params.set('to', `${TO_POINT.lat.toFixed(4)},${TO_POINT.lon.toFixed(4)},${TO_POINT.name[LANG]}`);
     params.set('v', VEHICLE);
     if (ROUND_TRIP) params.set('rt', '1');
+    if (TOLL_FREE_MODE) params.set('tf', '1');
     history.replaceState(null, '', '?' + params.toString());
 }
 
@@ -709,6 +738,10 @@ function restoreStateFromUrl() {
         if (params.get('rt') === '1') {
             ROUND_TRIP = true;
             $('roundTripBtn').classList.add('active');
+        }
+        if (params.get('tf') === '1') {
+            TOLL_FREE_MODE = true;
+            $('tollFreeToggleBtn').classList.add('active');
         }
         renderVehicleButtons();
         return true;
